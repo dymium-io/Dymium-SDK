@@ -23,23 +23,26 @@ class GhostPIIDetector:
         base_url: str,
         api_key: str | None = None,
         timeout_s: int = 10,
+        language: str = "en",
+        user_patterns: Optional[list[Dict[str, Any]]] = None,
         regex_rules: Optional[list[Dict[str, Any]]] = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout_s = timeout_s
+        self.language = language
+        self.user_patterns = user_patterns
         self.regex_rules = regex_rules or []
 
-    def detect(self, text: str, options: Optional[Dict[str, Any]] = None) -> Iterable[Dict[str, Any]]:
+    def detect(self, text: str) -> Iterable[Dict[str, Any]]:
         if not text:
             return []
-        options = options or {}
         payload = {
             "text": text,
-            "language": options.get("language", "en"),
+            "language": self.language,
         }
-        if "user_patterns" in options:
-            payload["user_patterns"] = options.get("user_patterns")
+        if self.user_patterns:
+            payload["user_patterns"] = self.user_patterns
 
         headers: Dict[str, str] = {"Content-Type": "application/json"}
         if self.api_key:

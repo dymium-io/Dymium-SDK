@@ -17,7 +17,6 @@ class ChatRequest(BaseModel):
     )
     messages: list[chat_event_schema.ChatEvent]
     recursion_limit: int | None = None
-    piiOptions: dict[str, Any] | None = None
     placeholderMap: placeholder_map_schema.PlaceholderMap | None = None
     toolSettings: tool_settings_schema.ToolSettings | None = None
     tool_choice: dict[str, Any] | str | None = None

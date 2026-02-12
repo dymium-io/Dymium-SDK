@@ -14,7 +14,6 @@ def wrap_tool_callable(
     ctx: SanitizationContext,
     *,
     tool_name: str | None = None,
-    pii_options: dict[str, Any] | None = None,
 ) -> Callable[..., Any]:
     name = tool_name or getattr(func, "__name__", "tool")
 
@@ -23,7 +22,7 @@ def wrap_tool_callable(
         sanitizer.record_tool_call(name, ctx)
         resolved_args, resolved_kwargs = _resolve_invocation(func, args, kwargs, sanitizer, ctx)
         result = func(*resolved_args, **resolved_kwargs)
-        return sanitizer.sanitize_tool_output(result, ctx, pii_options, name)
+        return sanitizer.sanitize_tool_output(result, ctx, tool_name=name)
 
     # Preserve explicit tool identity for frameworks that infer metadata from callables.
     wrapped.__name__ = name
@@ -36,7 +35,6 @@ def wrap_tool(
     ctx: SanitizationContext,
     *,
     tool_name: str | None = None,
-    pii_options: dict[str, Any] | None = None,
 ) -> Any:
     if callable(tool) and not _has_tool_metadata(tool):
         return wrap_tool_callable(
@@ -44,14 +42,12 @@ def wrap_tool(
             sanitizer,
             ctx,
             tool_name=tool_name,
-            pii_options=pii_options,
         )
     return _ToolProxy(
         tool,
         sanitizer,
         ctx,
         tool_name=tool_name,
-        pii_options=pii_options,
     )
 
 
@@ -59,11 +55,9 @@ def wrap_tools(
     tools: Iterable[Any],
     sanitizer: Sanitizer,
     ctx: SanitizationContext,
-    *,
-    pii_options: dict[str, Any] | None = None,
 ) -> List[Any]:
     return [
-        wrap_tool(tool, sanitizer, ctx, pii_options=pii_options)
+        wrap_tool(tool, sanitizer, ctx)
         for tool in tools
     ]
 
@@ -76,12 +70,10 @@ class _ToolProxy:
         ctx: SanitizationContext,
         *,
         tool_name: str | None = None,
-        pii_options: dict[str, Any] | None = None,
     ) -> None:
         self._tool = tool
         self._sanitizer = sanitizer
         self._ctx = ctx
-        self._pii_options = pii_options
         metadata = getattr(tool, "metadata", None)
         self._name = tool_name or getattr(metadata, "name", None) or getattr(tool, "__name__", "tool")
 
@@ -93,7 +85,7 @@ class _ToolProxy:
         self._sanitizer.record_tool_call(self._name, self._ctx)
         resolved_args, resolved_kwargs = _resolve_invocation(self._tool, args, kwargs, self._sanitizer, self._ctx)
         result = self._tool(*resolved_args, **resolved_kwargs)
-        return self._sanitizer.sanitize_tool_output(result, self._ctx, self._pii_options, self._name)
+        return self._sanitizer.sanitize_tool_output(result, self._ctx, tool_name=self._name)
 
     async def acall(self, *args: Any, **kwargs: Any) -> Any:
         self._sanitizer.record_tool_call(self._name, self._ctx)
@@ -102,7 +94,7 @@ class _ToolProxy:
             result = await self._tool.acall(*resolved_args, **resolved_kwargs)
         else:
             result = self._tool(*resolved_args, **resolved_kwargs)
-        return self._sanitizer.sanitize_tool_output(result, self._ctx, self._pii_options, self._name)
+        return self._sanitizer.sanitize_tool_output(result, self._ctx, tool_name=self._name)
 
 
 def _resolve_invocation(

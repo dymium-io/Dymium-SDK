@@ -16,7 +16,6 @@ def create_sanitized_agent(
     sanitizer: Sanitizer,
     *,
     system_prompt: str | None = DEFAULT_SYSTEM_PROMPT,
-    pii_options: Dict[str, Any] | None = None,
     messages_key: str = "messages",
     state_schema: Any = DymiumMessagesState,
     max_tool_calls: int | None = None,
@@ -34,7 +33,6 @@ def create_sanitized_agent(
     tools_node = make_tool_node(
         tools,
         sanitizer,
-        pii_options=pii_options,
         messages_key=messages_key,
     )
 
@@ -43,7 +41,6 @@ def create_sanitized_agent(
             state,
             sanitizer,
             system_prompt=system_prompt,
-            pii_options=pii_options,
             messages_key=messages_key,
         )
         ai_msg = model.invoke(updates[messages_key])

@@ -17,6 +17,8 @@ class AzurePIIDetector:
         timeout_s: int = 10,
         api_version: str = "2022-05-01",
         use_legacy_endpoint: bool = False,
+        language: str = "en",
+        parameters: Dict[str, Any] | None = None,
         regex_rules: Optional[list[Dict[str, Any]]] = None,
     ) -> None:
         self.endpoint = endpoint.rstrip("/")
@@ -25,34 +27,33 @@ class AzurePIIDetector:
         self.timeout_s = timeout_s
         self.api_version = api_version
         self.use_legacy_endpoint = use_legacy_endpoint
+        self.language = language
+        self.parameters = parameters or {}
         self.regex_rules = regex_rules or []
 
-    def detect(self, text: str, options: Optional[Dict[str, Any]] = None) -> Iterable[Dict[str, Any]]:
+    def detect(self, text: str) -> Iterable[Dict[str, Any]]:
         if not text:
             return []
-        options = options or {}
-        language = options.get("language", "en")
 
         if self.use_legacy_endpoint:
             url = f"{self.endpoint}/text/analytics/v3.1/entities/recognition/pii"
             payload = {
                 "documents": [
-                    {"id": "0", "text": text, "language": language},
+                    {"id": "0", "text": text, "language": self.language},
                 ]
             }
         else:
             url = f"{self.endpoint}/language/:analyze-text?api-version={self.api_version}"
-            params = _azure_params(options)
             payload = {
                 "kind": "PiiEntityRecognition",
                 "analysisInput": {
                     "documents": [
-                        {"id": "0", "text": text, "language": language},
+                        {"id": "0", "text": text, "language": self.language},
                     ]
                 },
             }
-            if params:
-                payload["parameters"] = params
+            if self.parameters:
+                payload["parameters"] = self.parameters
 
         resp = requests.post(
             url,
@@ -102,40 +103,6 @@ class AzurePIIDetector:
         if self.bearer_token:
             headers["Authorization"] = f"Bearer {self.bearer_token}"
         return headers
-
-
-def _azure_params(options: Dict[str, Any]) -> Dict[str, Any]:
-    params: Dict[str, Any] = {}
-    for key in (
-        "domain",
-        "piiCategories",
-        "excludePiiCategories",
-        "modelVersion",
-        "confidenceScoreThreshold",
-        "stringIndexType",
-        "loggingOptOut",
-        "disableEntityValidation",
-        "entitySynonyms",
-        "valueExclusionPolicy",
-        "redactionPolicies",
-    ):
-        if key in options and options[key] is not None:
-            params[key] = options[key]
-        snake = _camel_to_snake(key)
-        if snake in options and options[snake] is not None:
-            params[key] = options[snake]
-    return params
-
-
-def _camel_to_snake(text: str) -> str:
-    out = []
-    for ch in text:
-        if ch.isupper():
-            out.append("_")
-            out.append(ch.lower())
-        else:
-            out.append(ch)
-    return "".join(out).lstrip("_")
 
 
 def _extract_documents(payload: Dict[str, Any]) -> list[Dict[str, Any]]:

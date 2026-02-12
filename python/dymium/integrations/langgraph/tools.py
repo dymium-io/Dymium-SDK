@@ -10,7 +10,6 @@ from dymium.sanitization import Sanitizer, SanitizationContext, ensure_security_
 def make_tool_call_wrapper(
     sanitizer: Sanitizer,
     *,
-    pii_options: Dict[str, Any] | None = None,
     messages_key: str = "messages",
 ) -> Callable[[Any, Callable[[Any], Any]], Any]:
     def wrap_tool_call(request: Any, handler: Callable[[Any], Any]) -> Any:
@@ -39,7 +38,6 @@ def make_tool_call_wrapper(
         sanitized_result = sanitizer.sanitize_tool_output(
             _tool_result_payload(result),
             ctx,
-            pii_options,
             tool_name,
         )
 
@@ -53,7 +51,6 @@ def make_tool_node(
     tools: Sequence[Any],
     sanitizer: Sanitizer,
     *,
-    pii_options: Dict[str, Any] | None = None,
     messages_key: str = "messages",
     **kwargs: Any,
 ):
@@ -62,7 +59,7 @@ def make_tool_node(
     except Exception as exc:  # pragma: no cover
         raise RuntimeError("LangGraph is not installed. Install with: pip install langgraph") from exc
 
-    wrap = make_tool_call_wrapper(sanitizer, pii_options=pii_options, messages_key=messages_key)
+    wrap = make_tool_call_wrapper(sanitizer, messages_key=messages_key)
     return ToolNode(tools, messages_key=messages_key, wrap_tool_call=wrap, **kwargs)
 
 

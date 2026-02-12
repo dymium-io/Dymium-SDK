@@ -102,6 +102,8 @@ def register_default_adapters() -> None:
             base_url=cfg["base_url"],
             api_key=cfg.get("api_key"),
             timeout_s=cfg.get("timeout_s", 10),
+            language=cfg.get("language", "en"),
+            user_patterns=cfg.get("user_patterns"),
             regex_rules=cfg.get("regex_rules") or cfg.get("regexRules"),
         ),
     )
@@ -112,6 +114,9 @@ def register_default_adapters() -> None:
         factory=lambda cfg: PresidioDetector(
             base_url=cfg["base_url"],
             timeout_s=cfg.get("timeout_s", 10),
+            language=cfg.get("language", "en"),
+            entities=cfg.get("entities"),
+            score_threshold=cfg.get("score_threshold"),
             regex_rules=cfg.get("regex_rules") or cfg.get("regexRules"),
         ),
     )
@@ -123,6 +128,7 @@ def register_default_adapters() -> None:
             region=cfg["region"],
             credentials=cfg.get("credentials"),
             endpoint_url=cfg.get("endpoint_url"),
+            language_code=cfg.get("language_code", "en"),
             regex_rules=cfg.get("regex_rules") or cfg.get("regexRules"),
         ),
     )
@@ -136,6 +142,14 @@ def register_default_adapters() -> None:
             location_id=cfg.get("location_id"),
             base_url=cfg.get("base_url", "https://dlp.googleapis.com"),
             timeout_s=cfg.get("timeout_s", 10),
+            info_types=cfg.get("info_types") or cfg.get("infoTypes"),
+            min_likelihood=cfg.get("min_likelihood") or cfg.get("minLikelihood"),
+            include_quote=cfg.get("include_quote", cfg.get("includeQuote", True)),
+            min_likelihood_per_info_type=cfg.get("min_likelihood_per_info_type") or cfg.get("minLikelihoodPerInfoType"),
+            limits=cfg.get("limits"),
+            exclude_info_types=cfg.get("exclude_info_types", cfg.get("excludeInfoTypes")),
+            custom_info_types=cfg.get("custom_info_types") or cfg.get("customInfoTypes"),
+            rule_set=cfg.get("rule_set") or cfg.get("ruleSet"),
             regex_rules=cfg.get("regex_rules") or cfg.get("regexRules"),
         ),
     )
@@ -150,6 +164,8 @@ def register_default_adapters() -> None:
             timeout_s=cfg.get("timeout_s", 10),
             api_version=cfg.get("api_version", "2022-05-01"),
             use_legacy_endpoint=cfg.get("use_legacy_endpoint", False),
+            language=cfg.get("language", "en"),
+            parameters=cfg.get("parameters"),
             regex_rules=cfg.get("regex_rules") or cfg.get("regexRules"),
         ),
     )

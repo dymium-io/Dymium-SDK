@@ -18,12 +18,10 @@ class SanitizedAgentWorkflow:
         workflow: Any,
         sanitizer: Sanitizer,
         ctx: SanitizationContext,
-        pii_options: dict[str, Any] | None = None,
     ) -> None:
         self._workflow = workflow
         self._sanitizer = sanitizer
         self._ctx = ctx
-        self._pii_options = pii_options
 
     def run(
         self,
@@ -34,15 +32,15 @@ class SanitizedAgentWorkflow:
         safe_user_msg = self._sanitize_message(user_msg)
         safe_history = None
         if chat_history is not None:
-            safe_history = self._sanitizer.sanitize_messages(chat_history, self._ctx, self._pii_options)
+            safe_history = self._sanitizer.sanitize_messages(chat_history, self._ctx)
         return self._workflow.run(user_msg=safe_user_msg, chat_history=safe_history, **kwargs)
 
     def _sanitize_message(self, msg: Any) -> Any:
         if msg is None:
             return None
         if isinstance(msg, str):
-            return self._sanitizer.sanitize_text(msg, self._ctx, self._pii_options)
-        out = self._sanitizer.sanitize_messages([msg], self._ctx, self._pii_options)
+            return self._sanitizer.sanitize_text(msg, self._ctx)
+        out = self._sanitizer.sanitize_messages([msg], self._ctx)
         return out[0] if out else msg
 
     def __getattr__(self, name: str) -> Any:
@@ -56,7 +54,6 @@ def create_sanitized_agent_workflow(
     *,
     ctx: SanitizationContext | None = None,
     system_prompt: str | None = DEFAULT_SYSTEM_PROMPT,
-    pii_options: dict[str, Any] | None = None,
     **kwargs: Any,
 ) -> Any:
     try:
@@ -72,9 +69,8 @@ def create_sanitized_agent_workflow(
         sanitizer,
         ctx=ctx,
         system_prompt=system_prompt,
-        pii_options=pii_options,
     )
-    safe_tools = wrap_tools(tools_or_functions, sanitizer, ctx, pii_options=pii_options)
+    safe_tools = wrap_tools(tools_or_functions, sanitizer, ctx)
 
     workflow = AgentWorkflow.from_tools_or_functions(
         list(safe_tools),
@@ -82,4 +78,4 @@ def create_sanitized_agent_workflow(
         system_prompt=None,
         **kwargs,
     )
-    return SanitizedAgentWorkflow(workflow, sanitizer, ctx, pii_options=pii_options)
+    return SanitizedAgentWorkflow(workflow, sanitizer, ctx)

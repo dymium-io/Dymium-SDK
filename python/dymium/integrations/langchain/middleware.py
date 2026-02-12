@@ -104,11 +104,9 @@ class DymiumMiddleware:  # runtime import of AgentMiddleware below
         self,
         sanitizer: Sanitizer,
         system_prompt: str | None = DEFAULT_SYSTEM_PROMPT,
-        pii_options: Dict[str, Any] | None = None,
     ) -> None:
         self.sanitizer = sanitizer
         self.system_prompt = system_prompt
-        self.pii_options = pii_options
 
         # Late import to keep langchain optional
         try:
@@ -160,7 +158,7 @@ class DymiumMiddleware:  # runtime import of AgentMiddleware below
 
         prefix = messages[:last_idx]
         tail = messages[last_idx:]
-        sanitized_tail = self.sanitizer.sanitize_messages(tail, ctx, self.pii_options)
+        sanitized_tail = self.sanitizer.sanitize_messages(tail, ctx)
         sanitized = prefix + sanitized_tail
         last_idx = len(sanitized)
 
@@ -196,7 +194,6 @@ class DymiumMiddleware:  # runtime import of AgentMiddleware below
         sanitized_result = self.sanitizer.sanitize_tool_output(
             _tool_result_payload(result),
             ctx,
-            self.pii_options,
             tool_name,
         )
         _apply_sanitized_tool_result(result, sanitized_result)

@@ -46,11 +46,10 @@ class Sanitizer:
         self,
         text: str,
         ctx: SanitizationContext,
-        pii_options: Dict[str, Any] | None = None,
     ) -> str:
         if not text:
             return ""
-        entities = _coerce_entities(self.pii.normalize(self.pii.detect(text, options=pii_options)))
+        entities = _coerce_entities(self.pii.normalize(self.pii.detect(text)))
         summary = _summarize_entities(entities)
         _merge_entity_summary(ctx.security_summary["input_redaction"]["entities_detected"], summary)
         if summary.get("count", 0) > 0:
@@ -65,12 +64,11 @@ class Sanitizer:
         self,
         messages: Iterable[Any],
         ctx: SanitizationContext,
-        pii_options: Dict[str, Any] | None = None,
     ) -> List[Any]:
         sanitized: List[Any] = []
         for msg in messages:
             content = _get_message_content(msg)
-            new_content = _sanitize_message_content(content, ctx, self, pii_options)
+            new_content = _sanitize_message_content(content, ctx, self)
             sanitized.append(_set_message_content(msg, new_content))
         return sanitized
 
@@ -83,14 +81,12 @@ class Sanitizer:
         self,
         tool_output: Any,
         ctx: SanitizationContext,
-        pii_options: Dict[str, Any] | None = None,
         tool_name: str | None = None,
     ) -> Any:
         sanitized, summary = _sanitize_tool_output(
             tool_output,
             ctx.placeholder_map,
             self,
-            pii_options,
             tool_name,
         )
         if summary:
@@ -159,15 +155,14 @@ def _sanitize_message_content(
     content: Any,
     ctx: SanitizationContext,
     sanitizer: Sanitizer,
-    pii_options: Dict[str, Any] | None,
 ) -> Any:
     if isinstance(content, str):
-        return sanitizer.sanitize_text(content, ctx, pii_options)
+        return sanitizer.sanitize_text(content, ctx)
     if isinstance(content, list):
         parts = []
         for part in content:
             if isinstance(part, dict) and isinstance(part.get("text"), str):
-                new_text = sanitizer.sanitize_text(part.get("text", ""), ctx, pii_options)
+                new_text = sanitizer.sanitize_text(part.get("text", ""), ctx)
                 new_part = dict(part)
                 new_part["text"] = new_text
                 parts.append(new_part)
@@ -191,7 +186,6 @@ def _sanitize_tool_output(
     tool_output: Any,
     placeholder_map: Dict[str, str],
     sanitizer: Sanitizer,
-    pii_options: Dict[str, Any] | None,
     tool_name: str | None,
 ) -> Tuple[Any, Dict[str, Any] | None]:
     if isinstance(tool_output, dict):
@@ -202,7 +196,6 @@ def _sanitize_tool_output(
                 v,
                 placeholder_map,
                 sanitizer,
-                pii_options,
                 tool_name,
             )
             sanitized[k] = sanitized_value
@@ -217,7 +210,6 @@ def _sanitize_tool_output(
                 item,
                 placeholder_map,
                 sanitizer,
-                pii_options,
                 tool_name,
             )
             items.append(sanitized_value)
@@ -228,7 +220,7 @@ def _sanitize_tool_output(
         if not tool_output:
             return tool_output, None
         entities = _coerce_entities(
-            sanitizer.pii.normalize(sanitizer.pii.detect(tool_output, options=pii_options))
+            sanitizer.pii.normalize(sanitizer.pii.detect(tool_output))
         )
         if not entities:
             return tool_output, None

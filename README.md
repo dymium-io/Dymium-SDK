@@ -326,4 +326,4 @@ sanitizer = Sanitizer(
 )
 ```
 
-Optional per-call detection options can be passed through `pii_options` when calling sanitizer methods (for example language, provider filters, thresholds).
+Detection behavior should be configured when creating the detector instance (for example language defaults, provider filters, and thresholds).

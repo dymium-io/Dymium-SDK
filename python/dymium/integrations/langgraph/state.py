@@ -90,7 +90,6 @@ def sanitize_state_messages(
     sanitizer: Sanitizer,
     *,
     system_prompt: str | None = DEFAULT_SYSTEM_PROMPT,
-    pii_options: Dict[str, Any] | None = None,
     messages_key: str = "messages",
 ) -> Dict[str, Any]:
     messages = list(state.get(messages_key, []) or [])
@@ -116,7 +115,7 @@ def sanitize_state_messages(
 
     prefix = messages[:last_idx]
     tail = messages[last_idx:]
-    sanitized_tail = sanitizer.sanitize_messages(tail, ctx, pii_options)
+    sanitized_tail = sanitizer.sanitize_messages(tail, ctx)
     sanitized = prefix + sanitized_tail
     last_idx = len(sanitized)
 

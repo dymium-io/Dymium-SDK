@@ -26,27 +26,32 @@ class PresidioDetector:
         self,
         base_url: str,
         timeout_s: int = 10,
+        language: str = "en",
+        entities: Optional[list[str]] = None,
+        score_threshold: float | None = None,
         regex_rules: Optional[list[Dict[str, Any]]] = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_s = timeout_s
+        self.language = language
+        self.entities = entities
+        self.score_threshold = score_threshold
         self.regex_rules = regex_rules or []
         self.calls: list[Dict[str, Any]] = []
         self.last_request: Dict[str, Any] | None = None
         self.last_response: Any = None
 
-    def detect(self, text: str, options: Optional[Dict[str, Any]] = None) -> Iterable[Dict[str, Any]]:
+    def detect(self, text: str) -> Iterable[Dict[str, Any]]:
         if not text:
             return []
-        options = options or {}
         payload: Dict[str, Any] = {
             "text": text,
-            "language": options.get("language", "en"),
+            "language": self.language,
         }
-        if "entities" in options:
-            payload["entities"] = options.get("entities")
-        if "score_threshold" in options:
-            payload["score_threshold"] = options.get("score_threshold")
+        if self.entities:
+            payload["entities"] = self.entities
+        if self.score_threshold is not None:
+            payload["score_threshold"] = self.score_threshold
 
         url = f"{self.base_url}/analyze"
         self.last_request = {"url": url, "payload": payload}

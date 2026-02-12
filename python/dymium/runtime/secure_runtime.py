@@ -69,8 +69,6 @@ class SecureRuntime(AgentRuntime):
         tool_inputs_protected = False
         tool_outputs_protected = False
 
-        pii_options = request.get("piiOptions")
-
         # Build messages from request (canonical input).
         messages_in = request.get("messages")
         if not isinstance(messages_in, list) or not messages_in:
@@ -89,7 +87,6 @@ class SecureRuntime(AgentRuntime):
             messages,
             placeholder_map,
             input_entities_summary,
-            pii_options,
         )
 
         max_steps = request.get("recursion_limit")
@@ -148,7 +145,6 @@ class SecureRuntime(AgentRuntime):
                 result, tool_pii = self._placeholderize_tool_output(
                     result,
                     placeholder_map,
-                    pii_options,
                     tool_name=resolved_tc.get("name"),
                 )
                 if tool_pii:
@@ -214,7 +210,6 @@ class SecureRuntime(AgentRuntime):
         messages: list[Any],
         placeholder_map: Dict[str, str],
         summary: Dict[str, Any],
-        pii_options: Any = None,
     ) -> tuple[list[Any], Dict[str, str]]:
         sanitized: list[Any] = []
         for msg in messages:
@@ -224,7 +219,7 @@ class SecureRuntime(AgentRuntime):
             content = msg.get("content")
             if isinstance(content, str) and content:
                 entities = self._coerce_entities(
-                    self.components.pii.normalize(self.components.pii.detect(content, options=pii_options))
+                    self.components.pii.normalize(self.components.pii.detect(content))
                 )
                 if entities:
                     summary["count"] += len(entities)
@@ -337,7 +332,6 @@ class SecureRuntime(AgentRuntime):
         self,
         tool_output: Any,
         placeholder_map: Dict[str, str],
-        pii_options: Any = None,
         tool_name: str | None = None,
     ) -> Any:
         if isinstance(tool_output, dict):
@@ -347,7 +341,6 @@ class SecureRuntime(AgentRuntime):
                 sanitized["result"], tool_pii = self._placeholderize_tool_output(
                     tool_output.get("result"),
                     placeholder_map,
-                    pii_options,
                     tool_name=tool_name or tool_output.get("name"),
                 )
                 return sanitized, tool_pii
@@ -357,7 +350,6 @@ class SecureRuntime(AgentRuntime):
                 sanitized_value, pii_info = self._placeholderize_tool_output(
                     v,
                     placeholder_map,
-                    pii_options,
                     tool_name=tool_name,
                 )
                 sanitized[k] = sanitized_value
@@ -371,7 +363,6 @@ class SecureRuntime(AgentRuntime):
                 sanitized_value, pii_info = self._placeholderize_tool_output(
                     v,
                     placeholder_map,
-                    pii_options,
                     tool_name=tool_name,
                 )
                 sanitized_list.append(sanitized_value)
@@ -382,7 +373,7 @@ class SecureRuntime(AgentRuntime):
             if not tool_output:
                 return tool_output, None
             entities = self._coerce_entities(
-                self.components.pii.normalize(self.components.pii.detect(tool_output, options=pii_options))
+                self.components.pii.normalize(self.components.pii.detect(tool_output))
             )
             if not entities:
                 return tool_output, None

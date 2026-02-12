@@ -33,13 +33,11 @@ if CustomLLM is not None:
             *,
             ctx: SanitizationContext | None = None,
             system_prompt: str | None = DEFAULT_SYSTEM_PROMPT,
-            pii_options: dict[str, Any] | None = None,
         ) -> None:
             self._llm = llm
             self._sanitizer = sanitizer
             self._ctx = ctx or SanitizationContext(security_summary=ensure_security_summary())
             self._system_prompt = system_prompt
-            self._pii_options = pii_options
 
         @property
         def metadata(self) -> LLMMetadata:
@@ -50,7 +48,7 @@ if CustomLLM is not None:
 
         def complete(self, prompt: str, **kwargs: Any) -> CompletionResponse:
             full_prompt = _prepend_system(self._system_prompt, prompt)
-            sanitized_prompt = self._sanitizer.sanitize_text(full_prompt, self._ctx, self._pii_options)
+            sanitized_prompt = self._sanitizer.sanitize_text(full_prompt, self._ctx)
 
             if hasattr(self._llm, "complete"):
                 resp = self._llm.complete(sanitized_prompt, **kwargs)
@@ -63,7 +61,7 @@ if CustomLLM is not None:
                 raise RuntimeError("Wrapped LLM does not support complete or chat")
 
             # Keep model output placeholder-safe
-            safe_text = self._sanitizer.sanitize_text(text, self._ctx, self._pii_options)
+            safe_text = self._sanitizer.sanitize_text(text, self._ctx)
             return CompletionResponse(text=safe_text, raw=resp)
 
         def stream_complete(self, prompt: str, **kwargs: Any) -> Iterable[CompletionResponse]:
@@ -72,43 +70,43 @@ if CustomLLM is not None:
         def chat(self, messages: List[Any], **kwargs: Any) -> Any:
             if not hasattr(self._llm, "chat"):
                 raise RuntimeError("Wrapped LLM does not support chat")
-            safe_messages = self._sanitizer.sanitize_messages(messages, self._ctx, self._pii_options)
+            safe_messages = self._sanitizer.sanitize_messages(messages, self._ctx)
             resp = self._llm.chat(safe_messages, **kwargs)
-            return _sanitize_chat_response(resp, self._sanitizer, self._ctx, self._pii_options)
+            return _sanitize_chat_response(resp, self._sanitizer, self._ctx)
 
         async def achat(self, messages: List[Any], **kwargs: Any) -> Any:
             if not hasattr(self._llm, "achat"):
                 raise RuntimeError("Wrapped LLM does not support achat")
-            safe_messages = self._sanitizer.sanitize_messages(messages, self._ctx, self._pii_options)
+            safe_messages = self._sanitizer.sanitize_messages(messages, self._ctx)
             resp = await self._llm.achat(safe_messages, **kwargs)
-            return _sanitize_chat_response(resp, self._sanitizer, self._ctx, self._pii_options)
+            return _sanitize_chat_response(resp, self._sanitizer, self._ctx)
 
         def stream_chat(self, messages: List[Any], **kwargs: Any) -> Iterable[Any]:
             if not hasattr(self._llm, "stream_chat"):
                 raise RuntimeError("Wrapped LLM does not support stream_chat")
-            safe_messages = self._sanitizer.sanitize_messages(messages, self._ctx, self._pii_options)
+            safe_messages = self._sanitizer.sanitize_messages(messages, self._ctx)
             for chunk in self._llm.stream_chat(safe_messages, **kwargs):
-                yield _sanitize_chat_response(chunk, self._sanitizer, self._ctx, self._pii_options)
+                yield _sanitize_chat_response(chunk, self._sanitizer, self._ctx)
 
         async def astream_chat(self, messages: List[Any], **kwargs: Any) -> Any:
             if not hasattr(self._llm, "astream_chat"):
                 raise RuntimeError("Wrapped LLM does not support astream_chat")
-            safe_messages = self._sanitizer.sanitize_messages(messages, self._ctx, self._pii_options)
+            safe_messages = self._sanitizer.sanitize_messages(messages, self._ctx)
             async for chunk in self._llm.astream_chat(safe_messages, **kwargs):
-                yield _sanitize_chat_response(chunk, self._sanitizer, self._ctx, self._pii_options)
+                yield _sanitize_chat_response(chunk, self._sanitizer, self._ctx)
 
         def chat_with_tools(self, tools: List[Any], user_msg: Any = None, chat_history: List[Any] | None = None, **kwargs: Any) -> Any:
             if not hasattr(self._llm, "chat_with_tools"):
                 raise RuntimeError("Wrapped LLM does not support chat_with_tools")
-            safe_user_msg = _sanitize_optional_message(user_msg, self._sanitizer, self._ctx, self._pii_options)
-            safe_history = self._sanitizer.sanitize_messages(chat_history or [], self._ctx, self._pii_options)
+            safe_user_msg = _sanitize_optional_message(user_msg, self._sanitizer, self._ctx)
+            safe_history = self._sanitizer.sanitize_messages(chat_history or [], self._ctx)
             resp = self._llm.chat_with_tools(
                 tools,
                 user_msg=safe_user_msg,
                 chat_history=safe_history,
                 **kwargs,
             )
-            return _sanitize_chat_response(resp, self._sanitizer, self._ctx, self._pii_options)
+            return _sanitize_chat_response(resp, self._sanitizer, self._ctx)
 
         async def achat_with_tools(
             self,
@@ -119,15 +117,15 @@ if CustomLLM is not None:
         ) -> Any:
             if not hasattr(self._llm, "achat_with_tools"):
                 raise RuntimeError("Wrapped LLM does not support achat_with_tools")
-            safe_user_msg = _sanitize_optional_message(user_msg, self._sanitizer, self._ctx, self._pii_options)
-            safe_history = self._sanitizer.sanitize_messages(chat_history or [], self._ctx, self._pii_options)
+            safe_user_msg = _sanitize_optional_message(user_msg, self._sanitizer, self._ctx)
+            safe_history = self._sanitizer.sanitize_messages(chat_history or [], self._ctx)
             resp = await self._llm.achat_with_tools(
                 tools,
                 user_msg=safe_user_msg,
                 chat_history=safe_history,
                 **kwargs,
             )
-            return _sanitize_chat_response(resp, self._sanitizer, self._ctx, self._pii_options)
+            return _sanitize_chat_response(resp, self._sanitizer, self._ctx)
 
         def get_tool_calls_from_response(self, response: Any, **kwargs: Any) -> Any:
             if not hasattr(self._llm, "get_tool_calls_from_response"):
@@ -162,13 +160,12 @@ def _sanitize_optional_message(
     msg: Any,
     sanitizer: Sanitizer,
     ctx: SanitizationContext,
-    pii_options: dict[str, Any] | None,
 ) -> Any:
     if msg is None:
         return None
     if isinstance(msg, str):
-        return sanitizer.sanitize_text(msg, ctx, pii_options)
-    sanitized = sanitizer.sanitize_messages([msg], ctx, pii_options)
+        return sanitizer.sanitize_text(msg, ctx)
+    sanitized = sanitizer.sanitize_messages([msg], ctx)
     return sanitized[0] if sanitized else msg
 
 
@@ -176,7 +173,6 @@ def _sanitize_chat_response(
     resp: Any,
     sanitizer: Sanitizer,
     ctx: SanitizationContext,
-    pii_options: dict[str, Any] | None,
 ) -> Any:
     message = getattr(resp, "message", None)
     if message is None:
@@ -184,7 +180,7 @@ def _sanitize_chat_response(
     content = getattr(message, "content", None)
     if not isinstance(content, str):
         return resp
-    safe_content = sanitizer.sanitize_text(content, ctx, pii_options)
+    safe_content = sanitizer.sanitize_text(content, ctx)
     try:
         setattr(message, "content", safe_content)
     except Exception:

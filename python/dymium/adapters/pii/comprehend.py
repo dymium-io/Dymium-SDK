@@ -13,18 +13,18 @@ class ComprehendDetector:
         region: str,
         credentials: Dict[str, str] | None = None,
         endpoint_url: str | None = None,
+        language_code: str = "en",
         regex_rules: Optional[list[Dict[str, Any]]] = None,
     ) -> None:
         self.region = region
         self.credentials = credentials or {}
         self.endpoint_url = endpoint_url
+        self.language_code = language_code
         self.regex_rules = regex_rules or []
 
-    def detect(self, text: str, options: Optional[Dict[str, Any]] = None) -> Iterable[Dict[str, Any]]:
+    def detect(self, text: str) -> Iterable[Dict[str, Any]]:
         if not text:
             return []
-        options = options or {}
-        language_code = options.get("language_code") or options.get("languageCode") or "en"
 
         try:
             import boto3  # type: ignore
@@ -39,7 +39,7 @@ class ComprehendDetector:
             aws_secret_access_key=self.credentials.get("secret_access_key"),
             aws_session_token=self.credentials.get("session_token"),
         )
-        resp = client.detect_pii_entities(Text=text, LanguageCode=language_code)
+        resp = client.detect_pii_entities(Text=text, LanguageCode=self.language_code)
         entities = resp.get("Entities") or []
         out = []
         for ent in entities:
