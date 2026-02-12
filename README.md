@@ -227,16 +227,3 @@ print(result.get("security_summary"))
 ```
 
 ---
-
-## Repo Scripts
-
-Demos are in `tests/`:
-- `tests/run_langchain_agent_demo.sh`
-- `tests/run_langgraph_agent_demo.sh`
-- `tests/run_llamaindex_demo.sh`
-- `tests/run_secure_runtime_demo.sh`
-
----
-
-## Context Sheets
-- GhostDB chat + redaction + BI agent context: `GhostDB_Context_Sheet.md`
