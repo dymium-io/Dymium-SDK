@@ -228,91 +228,102 @@ print(result.get("security_summary"))
 
 ---
 
-## Detector Configuration (Sanitization Module First, SecureRuntime Also Supported)
+## Detector Configuration (Sanitization Module / Integrations)
 
-Primary path: instantiate detectors directly with `Sanitizer(...)` (framework integrations and custom loops).
-SecureRuntime path: set `pii` and `pii_config` in `RuntimeConfig(...)`.
-
-```python
-from dymium import RuntimeConfig
-
-config = RuntimeConfig(
-    model="openai:gpt-5",
-    pii="presidio",        # one of: presidio | ghostpii | comprehend | google_dlp | azure_pii
-    pii_config={...},
-    tools=[...],
-)
-```
+Use detector instances directly in `Sanitizer(...)` for framework integrations and custom loops.
+For brevity, non-Presidio snippets reuse `Sanitizer` and `RedactionEngine` imports from the Presidio example.
 
 ### Presidio
 
 ```python
-pii="presidio"
-pii_config={
-    "base_url": "https://pii.example.internal",
-    "timeout_s": 10,
-    "regex_rules": [{"pattern": "ORD-\\d+", "type": "ORDER_ID"}],
-}
+from dymium.sanitization import Sanitizer
+from dymium.redaction import RedactionEngine
+from dymium.detectors.pii import PresidioDetector
+
+sanitizer = Sanitizer(
+    pii=PresidioDetector(
+        base_url="https://pii.example.internal",
+        timeout_s=10,
+        regex_rules=[{"pattern": "ORD-\\d+", "type": "ORDER_ID"}],
+    ),
+    redaction=RedactionEngine(),
+)
 ```
 
 ### GhostPII (Dymium Detect)
 
 ```python
-pii="ghostpii"
-pii_config={
-    "base_url": "https://detect.example.internal",
-    "api_key": "...",      # optional
-    "timeout_s": 10,
-    "regex_rules": [{"pattern": "ORD-\\d+", "type": "ORDER_ID"}],
-}
+from dymium.detectors.pii import GhostPIIDetector
+
+sanitizer = Sanitizer(
+    pii=GhostPIIDetector(
+        base_url="https://detect.example.internal",
+        api_key="...",  # optional
+        timeout_s=10,
+        regex_rules=[{"pattern": "ORD-\\d+", "type": "ORDER_ID"}],
+    ),
+    redaction=RedactionEngine(),
+)
 ```
 
 ### AWS Comprehend
 
 ```python
-pii="comprehend"
-pii_config={
-    "region": "us-east-1",
-    "credentials": {
-        "access_key_id": "...",
-        "secret_access_key": "...",
-        "session_token": "...",   # optional
-    },
-    "endpoint_url": None,         # optional custom endpoint
-    "regex_rules": [{"pattern": "ORD-\\d+", "type": "ORDER_ID"}],
-}
+from dymium.detectors.pii import ComprehendDetector
+
+sanitizer = Sanitizer(
+    pii=ComprehendDetector(
+        region="us-east-1",
+        credentials={
+            "access_key_id": "...",
+            "secret_access_key": "...",
+            "session_token": "...",  # optional
+        },
+        endpoint_url=None,  # optional custom endpoint
+        regex_rules=[{"pattern": "ORD-\\d+", "type": "ORDER_ID"}],
+    ),
+    redaction=RedactionEngine(),
+)
 ```
 
 ### Google Cloud DLP
 
 ```python
-pii="google_dlp"
-pii_config={
-    "project_id": "my-gcp-project",
-    "location_id": "us",          # optional regional parent
-    "credentials": {
-        "token": "...",           # or
-        # "api_key": "...",
-    },
-    "base_url": "https://dlp.googleapis.com",
-    "timeout_s": 10,
-    "regex_rules": [{"pattern": "ORD-\\d+", "type": "ORDER_ID"}],
-}
+from dymium.detectors.pii import GoogleDLPDetector
+
+sanitizer = Sanitizer(
+    pii=GoogleDLPDetector(
+        project_id="my-gcp-project",
+        location_id="us",  # optional regional parent
+        credentials={
+            "token": "...",  # or api_key
+            # "api_key": "...",
+        },
+        base_url="https://dlp.googleapis.com",
+        timeout_s=10,
+        regex_rules=[{"pattern": "ORD-\\d+", "type": "ORDER_ID"}],
+    ),
+    redaction=RedactionEngine(),
+)
 ```
 
 ### Azure PII
 
 ```python
-pii="azure_pii"
-pii_config={
-    "endpoint": "https://my-language-resource.cognitiveservices.azure.com",
-    "api_key": "...",             # or bearer_token
-    "bearer_token": None,         # optional
-    "api_version": "2022-05-01",
-    "use_legacy_endpoint": False,
-    "timeout_s": 10,
-    "regex_rules": [{"pattern": "ORD-\\d+", "type": "ORDER_ID"}],
-}
+from dymium.detectors.pii import AzurePIIDetector
+
+sanitizer = Sanitizer(
+    pii=AzurePIIDetector(
+        endpoint="https://my-language-resource.cognitiveservices.azure.com",
+        api_key="...",  # or bearer_token
+        bearer_token=None,  # optional
+        api_version="2022-05-01",
+        use_legacy_endpoint=False,
+        timeout_s=10,
+        regex_rules=[{"pattern": "ORD-\\d+", "type": "ORDER_ID"}],
+    ),
+    redaction=RedactionEngine(),
+)
 ```
 
-Optional request-level detection options can be passed as `piiOptions` in `runtime.invoke(...)` (for example language, provider filters, thresholds).
+Optional per-call detection options can be passed through `pii_options` when calling sanitizer methods (for example language, provider filters, thresholds).
