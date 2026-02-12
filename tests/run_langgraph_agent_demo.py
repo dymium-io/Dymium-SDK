@@ -1,33 +1,15 @@
 import os
 import sys
-from typing import Any, Annotated, TypedDict
+from typing import Any
 
-from langgraph.graph import StateGraph, END
-try:
-    from langgraph.graph import MessagesState, add_messages
-except Exception:
-    MessagesState = None  # type: ignore
-    def add_messages(*args, **kwargs):  # type: ignore
-        return None
-
-from dymium.integrations.langgraph import make_tool_node, sanitize_state_messages, deobfuscate_last_message
+from dymium.integrations.langgraph import create_sanitized_agent, deobfuscate_last_message, DymiumMessagesState
 from dymium.sanitization import Sanitizer
 from dymium.redaction import RedactionEngine
 from dymium.detectors.pii import PresidioDetector
 from langchain.tools import tool
 
 
-if MessagesState is not None:
-    class GraphState(MessagesState, total=False):  # type: ignore[misc,valid-type]
-        placeholder_map: dict
-        security_summary: dict
-        last_sanitized_index: int
-else:
-    class GraphState(TypedDict, total=False):
-        messages: Annotated[list, add_messages]
-        placeholder_map: dict
-        security_summary: dict
-        last_sanitized_index: int
+GraphState = DymiumMessagesState
 
 
 CALLS: list[tuple[str, dict[str, Any]]] = []
@@ -139,7 +121,7 @@ def main() -> None:
         redaction=RedactionEngine(),
     )
 
-    tool_list = [
+    tools = [
         lookup_customer,
         list_recent_orders,
         get_order_details,
@@ -148,47 +130,15 @@ def main() -> None:
         get_shipping_status,
     ]
 
-    tools_node = make_tool_node(tool_list, sanitizer)
-
     from langchain.chat_models import init_chat_model
-    lc_model = init_chat_model(model).bind_tools(tool_list)
-
-    def model_node(state: dict) -> dict:
-        messages = state["messages"]
-        ai_msg = lc_model.invoke(messages)
-        return {"messages": [ai_msg]}
-
-    graph = StateGraph(GraphState)
-    graph.add_node("model", model_node)
-    graph.add_node("tools", tools_node)
-
-    max_tool_calls = 10
-
-    def should_continue(state: dict) -> str:
-        messages = state.get("messages", []) or []
-        if not messages:
-            return END
-        last = messages[-1]
-        tool_calls = None
-        if isinstance(last, dict):
-            tool_calls = last.get("tool_calls")
-            if tool_calls is None:
-                tool_calls = (last.get("additional_kwargs") or {}).get("tool_calls")
-        else:
-            tool_calls = getattr(last, "tool_calls", None)
-            if tool_calls is None:
-                tool_calls = getattr(last, "additional_kwargs", {}).get("tool_calls")
-        if not tool_calls:
-            return END
-        tool_usage = (state.get("security_summary") or {}).get("tool_usage", {})
-        if tool_usage.get("tool_calls_count", 0) >= max_tool_calls:
-            return END
-        return "tools"
-
-    graph.add_conditional_edges("model", should_continue, {"tools": "tools", END: END})
-    graph.add_edge("tools", "model")
-    graph.set_entry_point("model")
-    app = graph.compile()
+    lc_model = init_chat_model(model)
+    app = create_sanitized_agent(
+        model=lc_model,
+        tools=tools,
+        sanitizer=sanitizer,
+        state_schema=GraphState,
+        max_tool_calls=10,
+    )
 
     raw_inputs = {
         "messages": [
@@ -209,9 +159,7 @@ def main() -> None:
         ]
     }
 
-    inputs = sanitize_state_messages(raw_inputs, sanitizer)
-
-    result = app.invoke(inputs, {"recursion_limit": 25})
+    result = app.invoke(raw_inputs, {"recursion_limit": 25})
     messages = result.get("messages", [])
 
     deob = deobfuscate_last_message(result, sanitizer)

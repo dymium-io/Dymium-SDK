@@ -8,36 +8,90 @@ This middleware preserves Dymium's placeholder safety by:
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Annotated
 
 try:
-    from typing_extensions import TypedDict, NotRequired
+    from typing_extensions import TypedDict
 except Exception:  # pragma: no cover - fallback for older envs
     from typing import TypedDict  # type: ignore
-    NotRequired = Any  # type: ignore
 
 from dymium.runtime.secure_runtime import DEFAULT_SYSTEM_PROMPT
 from dymium.sanitization import Sanitizer, SanitizationContext, ensure_security_summary
 from dataclasses import replace
 
+try:
+    from langgraph.graph import add_messages
+except Exception:  # pragma: no cover
+    def add_messages(a, b):  # type: ignore
+        return (a or []) + (b or [])
 
-try:  # Prefer LangChain's AgentState to keep message merge semantics.
-    from langchain.agents import AgentState
 
-    class DymiumState(AgentState):
-        placeholder_map: NotRequired[Dict[str, str]]
-        security_summary: NotRequired[Dict[str, Any]]
-        text_deobfuscated: NotRequired[str]
-        last_sanitized_index: NotRequired[int]
+def _merge_placeholder_maps(left: Dict[str, str] | None, right: Dict[str, str] | None) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    out.update(left or {})
+    out.update(right or {})
+    return out
 
-except Exception:  # pragma: no cover - fallback without langchain import
 
-    class DymiumState(TypedDict, total=False):
-        messages: List[Any]
-        placeholder_map: Dict[str, str]
-        security_summary: Dict[str, Any]
-        text_deobfuscated: str
-        last_sanitized_index: int
+def _merge_type_counts(left: Dict[str, int] | None, right: Dict[str, int] | None) -> Dict[str, int]:
+    out: Dict[str, int] = dict(left or {})
+    for k, v in (right or {}).items():
+        out[k] = out.get(k, 0) + int(v)
+    return out
+
+
+def _merge_tool_entity_rows(left: List[Dict[str, Any]] | None, right: List[Dict[str, Any]] | None) -> List[Dict[str, Any]]:
+    return list(left or []) + list(right or [])
+
+
+def _merge_security_summaries(left: Dict[str, Any] | None, right: Dict[str, Any] | None) -> Dict[str, Any]:
+    l = ensure_security_summary(left)
+    r = ensure_security_summary(right)
+    out = ensure_security_summary()
+
+    l_in = l.get("input_redaction", {})
+    r_in = r.get("input_redaction", {})
+    out["input_redaction"]["sensitive_detected"] = bool(
+        l_in.get("sensitive_detected") or r_in.get("sensitive_detected")
+    )
+    out["input_redaction"]["entities_detected"] = {
+        "count": int((l_in.get("entities_detected") or {}).get("count", 0))
+        + int((r_in.get("entities_detected") or {}).get("count", 0)),
+        "types": _merge_type_counts(
+            (l_in.get("entities_detected") or {}).get("types"),
+            (r_in.get("entities_detected") or {}).get("types"),
+        ),
+    }
+
+    l_tool = l.get("tool_usage", {})
+    r_tool = r.get("tool_usage", {})
+    out["tool_usage"]["tools_called"] = list(l_tool.get("tools_called") or []) + list(r_tool.get("tools_called") or [])
+    out["tool_usage"]["tool_calls_count"] = int(l_tool.get("tool_calls_count", 0)) + int(
+        r_tool.get("tool_calls_count", 0)
+    )
+    out["tool_usage"]["sensitive_inputs_protected"] = bool(
+        l_tool.get("sensitive_inputs_protected") or r_tool.get("sensitive_inputs_protected")
+    )
+    out["tool_usage"]["sensitive_outputs_protected"] = bool(
+        l_tool.get("sensitive_outputs_protected") or r_tool.get("sensitive_outputs_protected")
+    )
+    out["tool_usage"]["entities_detected_in_tool_outputs"] = _merge_tool_entity_rows(
+        l_tool.get("entities_detected_in_tool_outputs"),
+        r_tool.get("entities_detected_in_tool_outputs"),
+    )
+    return out
+
+
+def _max_int(left: int | None, right: int | None) -> int:
+    return max(int(left or 0), int(right or 0))
+
+
+class DymiumState(TypedDict, total=False):
+    messages: Annotated[List[Any], add_messages]
+    placeholder_map: Annotated[Dict[str, str], _merge_placeholder_maps]
+    security_summary: Annotated[Dict[str, Any], _merge_security_summaries]
+    text_deobfuscated: str
+    last_sanitized_index: Annotated[int, _max_int]
 
 
 class DymiumSanitizer(Sanitizer):
@@ -84,9 +138,10 @@ class DymiumMiddleware:  # runtime import of AgentMiddleware below
 
     def _before_model(self, state: Dict[str, Any]) -> Dict[str, Any]:
         messages = list(state.get("messages", []) or [])
+        base_map = dict(state.get("placeholder_map") or {})
         ctx = SanitizationContext(
-            placeholder_map=dict(state.get("placeholder_map") or {}),
-            security_summary=ensure_security_summary(state.get("security_summary")),
+            placeholder_map=dict(base_map),
+            security_summary=ensure_security_summary(),
         )
 
         inserted_system = False
@@ -111,16 +166,17 @@ class DymiumMiddleware:  # runtime import of AgentMiddleware below
 
         return {
             "messages": sanitized,
-            "placeholder_map": ctx.placeholder_map,
+            "placeholder_map": _map_delta(base_map, ctx.placeholder_map),
             "security_summary": ctx.security_summary,
             "last_sanitized_index": last_idx,
         }
 
     def _wrap_tool_call(self, request: Any, handler: Any) -> Any:
         state = getattr(request, "state", None) or getattr(request, "get", lambda k, d=None: d)("state", {})
+        base_map = dict(state.get("placeholder_map") or {})
         ctx = SanitizationContext(
-            placeholder_map=dict(state.get("placeholder_map") or {}),
-            security_summary=ensure_security_summary(state.get("security_summary")),
+            placeholder_map=dict(base_map),
+            security_summary=ensure_security_summary(),
         )
 
         tool_call = getattr(request, "tool_call", None) or getattr(request, "get", lambda k, d=None: d)("tool_call", {})
@@ -144,6 +200,7 @@ class DymiumMiddleware:  # runtime import of AgentMiddleware below
             tool_name,
         )
         _apply_sanitized_tool_result(result, sanitized_result)
+        map_delta = _map_delta(base_map, ctx.placeholder_map)
 
         # Persist placeholder_map and security_summary via Command update so state survives tool node merge.
         try:
@@ -159,7 +216,7 @@ class DymiumMiddleware:  # runtime import of AgentMiddleware below
             update = result.update
             if isinstance(update, dict):
                 merged = dict(update)
-                merged["placeholder_map"] = ctx.placeholder_map
+                merged["placeholder_map"] = map_delta
                 merged["security_summary"] = ctx.security_summary
                 if "messages" in merged and isinstance(merged["messages"], list):
                     merged["last_sanitized_index"] = existing_count + len(merged["messages"])
@@ -169,7 +226,7 @@ class DymiumMiddleware:  # runtime import of AgentMiddleware below
                     graph=result.graph,
                     update={
                         "messages": update,
-                        "placeholder_map": ctx.placeholder_map,
+                        "placeholder_map": map_delta,
                         "security_summary": ctx.security_summary,
                         "last_sanitized_index": existing_count + len(update),
                     },
@@ -182,13 +239,15 @@ class DymiumMiddleware:  # runtime import of AgentMiddleware below
             return Command(
                 update={
                     "messages": [result],
-                    "placeholder_map": ctx.placeholder_map,
+                    "placeholder_map": map_delta,
                     "security_summary": ctx.security_summary,
                     "last_sanitized_index": existing_count + 1,
                 }
             )
 
-        state["placeholder_map"] = ctx.placeholder_map
+        merged_map = dict(state.get("placeholder_map") or {})
+        merged_map.update(map_delta)
+        state["placeholder_map"] = merged_map
         state["security_summary"] = ctx.security_summary
         return result
 
@@ -321,3 +380,11 @@ def _apply_sanitized_tool_result(result: Any, sanitized: Any) -> None:
         for msg in msgs:
             new_msgs.append(_set_message_content(msg, sanitized))
         result.update["messages"] = new_msgs
+
+
+def _map_delta(base: Dict[str, str], updated: Dict[str, str]) -> Dict[str, str]:
+    delta: Dict[str, str] = {}
+    for k, v in updated.items():
+        if base.get(k) != v:
+            delta[k] = v
+    return delta

@@ -1,10 +1,88 @@
 """LangGraph state helpers."""
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Annotated
 
 from dymium.runtime.secure_runtime import DEFAULT_SYSTEM_PROMPT
 from dymium.sanitization import Sanitizer, SanitizationContext, ensure_security_summary
+
+try:
+    from typing_extensions import TypedDict
+except Exception:  # pragma: no cover
+    from typing import TypedDict  # type: ignore
+
+try:
+    from langgraph.graph import add_messages
+except Exception:  # pragma: no cover
+    def add_messages(a, b):  # type: ignore
+        return (a or []) + (b or [])
+
+
+def _merge_placeholder_maps(left: Dict[str, str] | None, right: Dict[str, str] | None) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    out.update(left or {})
+    out.update(right or {})
+    return out
+
+
+def _merge_type_counts(left: Dict[str, int] | None, right: Dict[str, int] | None) -> Dict[str, int]:
+    out: Dict[str, int] = dict(left or {})
+    for k, v in (right or {}).items():
+        out[k] = out.get(k, 0) + int(v)
+    return out
+
+
+def _merge_tool_entity_rows(left: List[Dict[str, Any]] | None, right: List[Dict[str, Any]] | None) -> List[Dict[str, Any]]:
+    return list(left or []) + list(right or [])
+
+
+def _merge_security_summaries(left: Dict[str, Any] | None, right: Dict[str, Any] | None) -> Dict[str, Any]:
+    l = ensure_security_summary(left)
+    r = ensure_security_summary(right)
+    out = ensure_security_summary()
+
+    l_in = l.get("input_redaction", {})
+    r_in = r.get("input_redaction", {})
+    out["input_redaction"]["sensitive_detected"] = bool(
+        l_in.get("sensitive_detected") or r_in.get("sensitive_detected")
+    )
+    out["input_redaction"]["entities_detected"] = {
+        "count": int((l_in.get("entities_detected") or {}).get("count", 0))
+        + int((r_in.get("entities_detected") or {}).get("count", 0)),
+        "types": _merge_type_counts(
+            (l_in.get("entities_detected") or {}).get("types"),
+            (r_in.get("entities_detected") or {}).get("types"),
+        ),
+    }
+
+    l_tool = l.get("tool_usage", {})
+    r_tool = r.get("tool_usage", {})
+    out["tool_usage"]["tools_called"] = list(l_tool.get("tools_called") or []) + list(r_tool.get("tools_called") or [])
+    out["tool_usage"]["tool_calls_count"] = int(l_tool.get("tool_calls_count", 0)) + int(
+        r_tool.get("tool_calls_count", 0)
+    )
+    out["tool_usage"]["sensitive_inputs_protected"] = bool(
+        l_tool.get("sensitive_inputs_protected") or r_tool.get("sensitive_inputs_protected")
+    )
+    out["tool_usage"]["sensitive_outputs_protected"] = bool(
+        l_tool.get("sensitive_outputs_protected") or r_tool.get("sensitive_outputs_protected")
+    )
+    out["tool_usage"]["entities_detected_in_tool_outputs"] = _merge_tool_entity_rows(
+        l_tool.get("entities_detected_in_tool_outputs"),
+        r_tool.get("entities_detected_in_tool_outputs"),
+    )
+    return out
+
+
+def _max_int(left: int | None, right: int | None) -> int:
+    return max(int(left or 0), int(right or 0))
+
+
+class DymiumMessagesState(TypedDict, total=False):
+    messages: Annotated[List[Any], add_messages]
+    placeholder_map: Annotated[Dict[str, str], _merge_placeholder_maps]
+    security_summary: Annotated[Dict[str, Any], _merge_security_summaries]
+    last_sanitized_index: Annotated[int, _max_int]
 
 
 def sanitize_state_messages(
@@ -16,9 +94,10 @@ def sanitize_state_messages(
     messages_key: str = "messages",
 ) -> Dict[str, Any]:
     messages = list(state.get(messages_key, []) or [])
+    base_map = dict(state.get("placeholder_map") or {})
     ctx = SanitizationContext(
-        placeholder_map=dict(state.get("placeholder_map") or {}),
-        security_summary=ensure_security_summary(state.get("security_summary")),
+        placeholder_map=dict(base_map),
+        security_summary=ensure_security_summary(),
     )
 
     inserted_system = False
@@ -43,7 +122,7 @@ def sanitize_state_messages(
 
     return {
         messages_key: sanitized,
-        "placeholder_map": ctx.placeholder_map,
+        "placeholder_map": _map_delta(base_map, ctx.placeholder_map),
         "security_summary": ctx.security_summary,
         "last_sanitized_index": last_idx,
     }
@@ -99,3 +178,11 @@ def _get_message_content(msg: Any) -> Any:
     if hasattr(msg, "content"):
         return getattr(msg, "content")
     return ""
+
+
+def _map_delta(base: Dict[str, str], updated: Dict[str, str]) -> Dict[str, str]:
+    delta: Dict[str, str] = {}
+    for k, v in updated.items():
+        if base.get(k) != v:
+            delta[k] = v
+    return delta

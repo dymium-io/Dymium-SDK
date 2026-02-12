@@ -88,8 +88,11 @@ print(result.get("security_summary"))
 ## LangGraph Integration
 
 ```python
-from langgraph.graph import StateGraph, END
-from dymium.integrations.langgraph import make_tool_node, sanitize_state_messages, deobfuscate_last_message
+from dymium.integrations.langgraph import (
+    create_sanitized_agent,
+    DymiumMessagesState,
+    deobfuscate_last_message,
+)
 from dymium.sanitization import Sanitizer
 from dymium.redaction import RedactionEngine
 from dymium.detectors.pii import PresidioDetector
@@ -100,35 +103,20 @@ sanitizer = Sanitizer(
     redaction=RedactionEngine(),
 )
 
-model = init_chat_model("openai:gpt-5").bind_tools([...])
+model = init_chat_model("openai:gpt-5")
 
-# tool node
-tools_node = make_tool_node([ ... ], sanitizer)
+app = create_sanitized_agent(
+    model=model,
+    tools=[...],
+    sanitizer=sanitizer,
+    state_schema=DymiumMessagesState,
+    max_tool_calls=10,
+)
 
-# model node
-
-def model_node(state: dict) -> dict:
-    updates = sanitize_state_messages(state, sanitizer)
-    messages = updates["messages"]
-    ai_msg = model.invoke(messages)
-    return {"messages": [ai_msg]}
-
-graph = StateGraph(dict)
-graph.add_node("model", model_node)
-graph.add_node("tools", tools_node)
-
-def should_continue(state: dict) -> str:
-    last = (state.get("messages") or [])[-1]
-    tool_calls = last.get("tool_calls") if isinstance(last, dict) else getattr(last, "tool_calls", None)
-    return "tools" if tool_calls else END
-
-graph.add_conditional_edges("model", should_continue, {"tools": "tools", END: END})
-graph.add_edge("tools", "model")
-graph.set_entry_point("model")
-app = graph.compile()
-
-inputs = sanitize_state_messages({"messages": [{"role": "user", "content": "Find orders for alice@example.com"}]}, sanitizer)
-result = app.invoke(inputs, {"recursion_limit": 12})
+result = app.invoke(
+    {"messages": [{"role": "user", "content": "Find orders for alice@example.com"}]},
+    {"recursion_limit": 12},
+)
 print(deobfuscate_last_message(result, sanitizer).get("text_deobfuscated"))
 print(result.get("security_summary"))
 ```
@@ -138,7 +126,9 @@ print(result.get("security_summary"))
 ## LlamaIndex Integration
 
 ```python
-from dymium.integrations.llamaindex import SanitizedLLM, wrap_tool_callable
+import asyncio
+
+from dymium.integrations.llamaindex import create_sanitized_agent_workflow
 from dymium.sanitization import Sanitizer, SanitizationContext
 from dymium.detectors.pii import PresidioDetector
 from dymium.redaction import RedactionEngine
@@ -151,18 +141,25 @@ sanitizer = Sanitizer(
 ctx = SanitizationContext()
 
 llm = LlamaOpenAI(model="gpt-5")
-safe_llm = SanitizedLLM(llm, sanitizer, ctx=ctx)
-
-# tool wrapper
 
 def lookup_customer(email: str) -> dict:
     return {"customer_id": "CUST-1001", "email": email}
 
-safe_lookup = wrap_tool_callable(lookup_customer, sanitizer, ctx, tool_name="lookup_customer")
+workflow = create_sanitized_agent_workflow(
+    tools_or_functions=[lookup_customer],
+    llm=llm,
+    sanitizer=sanitizer,
+    ctx=ctx,
+)
 
-response = safe_llm.complete("Email alice@example.com about order 19384")
-print(response.text)
-print(sanitizer.deobfuscate(response.text, ctx))
+async def _run():
+    return await workflow.run(user_msg="Find customer details for alice@example.com")
+
+result = asyncio.run(_run())
+text = getattr(getattr(result, "response", None), "content", "") or str(result)
+print(text)
+print(sanitizer.deobfuscate(text, ctx))
+print(ctx.security_summary)
 ```
 
 ---
@@ -174,7 +171,8 @@ print(sanitizer.deobfuscate(response.text, ctx))
 - `gemini`
 - `ghostllm` (Dymium LLM gateway)
 
-Configure with `RuntimeConfig(llm="...", llm_config={...})`.
+Preferred config style: `RuntimeConfig(model="provider:model", model_config={...})`.
+Legacy style also works: `RuntimeConfig(llm="provider", llm_config={"model": "...", ...})`.
 
 Framework integrations (LangChain/LangGraph/LlamaIndex) use the framework’s own LLM objects; Dymium supplies the sanitization boundary and tool wrapping.
 
@@ -209,8 +207,10 @@ config = RuntimeConfig(
             "handler": lookup_customer,
         }
     ],
-    mcp={"base_url": "http://127.0.0.1:40623/mcp"},
 )
+
+# Optional: add MCP alongside local tools.
+# config.mcp = {"base_url": "http://127.0.0.1:40623/mcp"}
 
 runtime = SecureRuntime.from_config(config)
 

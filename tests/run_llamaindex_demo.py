@@ -1,8 +1,10 @@
 import os
+import re
 import sys
+import asyncio
 from typing import Any
 
-from dymium.integrations.llamaindex import SanitizedLLM, wrap_tool_callable
+from dymium.integrations.llamaindex import create_sanitized_agent_workflow
 from dymium.sanitization import Sanitizer, SanitizationContext
 from dymium.redaction import RedactionEngine
 from dymium.detectors.pii import PresidioDetector
@@ -27,13 +29,16 @@ def _require_reachable(url: str) -> None:
         sys.exit(1)
 
 
+CALLS: list[tuple[str, dict[str, Any]]] = []
+PLACEHOLDER_RE = re.compile(r"PH_[A-Z]+_[A-Z0-9]{5}")
+
+
 def main() -> None:
     _require_env("OPENAI_API_KEY")
     presidio_url = os.getenv("PRESIDIO_URL", "http://localhost:5000")
     _require_reachable(presidio_url)
 
     try:
-        from llama_index.core.llms import LLM
         from llama_index.llms.openai import OpenAI as LlamaOpenAI
     except Exception as exc:
         print(f"Missing dependency: {exc}", file=sys.stderr)
@@ -47,26 +52,154 @@ def main() -> None:
     ctx = SanitizationContext()
 
     llm = LlamaOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-5"))
-    safe_llm = SanitizedLLM(llm, sanitizer, ctx=ctx)
 
     def lookup_customer(email: str) -> dict:
-        return {"customer_id": "CUST-1001", "email": email}
+        """Lookup customer by email."""
+        CALLS.append(("lookup_customer", {"email": email}))
+        return {
+            "customer_id": "CUST-1001",
+            "phone": "415-555-0135",
+            "email": email,
+            "alt_email": "alice.alt@example.com",
+        }
 
-    safe_lookup = wrap_tool_callable(lookup_customer, sanitizer, ctx, tool_name="lookup_customer")
+    def list_recent_orders(customer_id: str) -> dict:
+        """List recent orders for a customer."""
+        CALLS.append(("list_recent_orders", {"customer_id": customer_id}))
+        return {
+            "orders": [
+                {"order_id": "ORD-9001", "total": "$120.00"},
+                {"order_id": "ORD-9000", "total": "$75.00"},
+            ]
+        }
 
-    # Example prompt with PII
-    prompt = "Email alice@example.com about order 19384 and confirm shipment status."
-    response = safe_llm.complete(prompt)
-    print("LLM response (placeholder-safe):")
-    print(response.text)
+    def get_order_details(order_id: str) -> dict:
+        """Get detailed order information including tracking and ship contact."""
+        CALLS.append(("get_order_details", {"order_id": order_id}))
+        return {
+            "order_id": order_id,
+            "tracking_number": "1Z999AA10123456784",
+            "warehouse_phone": "415-555-0199",
+            "ship_address": "123 Market St, San Francisco, CA",
+        }
 
-    tool_result = safe_lookup(email="alice@example.com")
-    print("Tool result (sanitized):")
-    print(tool_result)
+    def get_shipping_status(order_id: str, phone: str) -> dict:
+        """Get shipping status for an order and phone on file."""
+        CALLS.append(("get_shipping_status", {"order_id": order_id, "phone": phone}))
+        return {
+            "order_id": order_id,
+            "status": "in_transit",
+            "phone": phone,
+        }
 
-    deobfuscated = sanitizer.deobfuscate(response.text, ctx)
-    print("Deobfuscated example:")
+    def get_carrier_contact(tracking_number: str) -> dict:
+        """Get carrier contact info for a tracking number."""
+        CALLS.append(("get_carrier_contact", {"tracking_number": tracking_number}))
+        return {
+            "tracking_number": tracking_number,
+            "carrier": "UPS",
+            "carrier_phone": "800-555-0100",
+        }
+
+    def request_eta(tracking_number: str, carrier_phone: str, customer_phone: str) -> dict:
+        """Request ETA from carrier for a tracking number."""
+        CALLS.append(("request_eta", {
+            "tracking_number": tracking_number,
+            "carrier_phone": carrier_phone,
+            "customer_phone": customer_phone,
+        }))
+        return {
+            "tracking_number": tracking_number,
+            "eta": "2026-02-15",
+            "carrier_phone": carrier_phone,
+        }
+
+    workflow = create_sanitized_agent_workflow(
+        tools_or_functions=[
+            lookup_customer,
+            list_recent_orders,
+            get_order_details,
+            get_shipping_status,
+            get_carrier_contact,
+            request_eta,
+        ],
+        llm=llm,
+        sanitizer=sanitizer,
+        ctx=ctx,
+    )
+
+    async def _run() -> Any:
+        return await workflow.run(
+            "My email is alice@example.com. I need a full shipment summary for my most recent order.\n"
+            "Please:\n"
+            "1) Find my customer record.\n"
+            "2) List my recent orders and pick the most recent.\n"
+            "3) Get order details to retrieve the tracking number and ship contact.\n"
+            "4) Use the tracking number to get the carrier contact phone.\n"
+            "5) Use the carrier phone AND the phone on file to request an ETA.\n"
+            "6) Check shipping status.\n"
+            "Summarize order ID, status, ETA, tracking number, and confirm which contact phone was used."
+        )
+
+    response = asyncio.run(_run())
+    text = getattr(getattr(response, "response", None), "content", "") or str(response)
+
+    print("Assistant (LLM-visible):")
+    print(text)
+    print("\nAssistant (deobfuscated):")
+    deobfuscated = sanitizer.deobfuscate(text, ctx)
     print(deobfuscated)
+    print("\nSecurity summary:")
+    print(ctx.security_summary)
+    print("\nTool calls:")
+    print(CALLS)
+
+    if not CALLS:
+        print("\nFAIL: No tools were called. Ensure your model supports tool calling.", file=sys.stderr)
+        sys.exit(1)
+
+    print("\nVerification:")
+    expected_tools = {
+        "lookup_customer",
+        "list_recent_orders",
+        "get_order_details",
+        "get_carrier_contact",
+        "request_eta",
+        "get_shipping_status",
+    }
+    seen_tools = {name for name, _ in CALLS}
+    missing = expected_tools - seen_tools
+    if missing:
+        print(f"FAIL: Missing tool calls: {sorted(missing)}", file=sys.stderr)
+    else:
+        print("PASS: All expected tools were called.")
+
+    def _fail_if_placeholder(value: str, label: str) -> bool:
+        if PLACEHOLDER_RE.search(value):
+            print(f"FAIL: Placeholder leaked into tool arg for {label}: {value}", file=sys.stderr)
+            return True
+        return False
+
+    failures = 0
+    for name, args in CALLS:
+        for key, value in args.items():
+            if isinstance(value, str) and key in {"email", "phone", "customer_phone", "carrier_phone"}:
+                if _fail_if_placeholder(value, f"{name}.{key}"):
+                    failures += 1
+
+    carrier_phone = "800-555-0100"
+    req_eta = next((a for n, a in CALLS if n == "request_eta"), None)
+    if not req_eta:
+        print("FAIL: request_eta not called.", file=sys.stderr)
+        failures += 1
+    elif req_eta.get("carrier_phone") != carrier_phone:
+        print("FAIL: carrier_phone was not resolved for request_eta.", file=sys.stderr)
+        failures += 1
+    else:
+        print("PASS: carrier_phone resolved for request_eta.")
+
+    if failures or missing:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

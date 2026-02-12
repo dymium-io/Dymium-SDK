@@ -15,9 +15,10 @@ def make_tool_call_wrapper(
 ) -> Callable[[Any, Callable[[Any], Any]], Any]:
     def wrap_tool_call(request: Any, handler: Callable[[Any], Any]) -> Any:
         state = request.state if hasattr(request, "state") else {}
+        base_map = dict(getattr(state, "get", lambda k, d=None: d)("placeholder_map", {}) or {})
         ctx = SanitizationContext(
-            placeholder_map=dict(getattr(state, "get", lambda k, d=None: d)("placeholder_map", {}) or {}),
-            security_summary=ensure_security_summary(getattr(state, "get", lambda k, d=None: d)("security_summary", None)),
+            placeholder_map=dict(base_map),
+            security_summary=ensure_security_summary(),
         )
 
         tool_call = request.tool_call
@@ -42,7 +43,8 @@ def make_tool_call_wrapper(
             tool_name,
         )
 
-        return _merge_tool_result(result, sanitized_result, ctx, state, messages_key)
+        map_delta = _map_delta(base_map, ctx.placeholder_map)
+        return _merge_tool_result(result, sanitized_result, map_delta, ctx, state, messages_key)
 
     return wrap_tool_call
 
@@ -75,6 +77,7 @@ def _tool_result_payload(result: Any) -> Any:
 def _merge_tool_result(
     result: Any,
     sanitized: Any,
+    map_delta: Dict[str, str],
     ctx: SanitizationContext,
     state: Any,
     messages_key: str,
@@ -93,7 +96,7 @@ def _merge_tool_result(
         update = result.update
         if isinstance(update, dict):
             merged = dict(update)
-            merged["placeholder_map"] = ctx.placeholder_map
+            merged["placeholder_map"] = map_delta
             merged["security_summary"] = ctx.security_summary
             if messages_key in merged and isinstance(merged[messages_key], list):
                 merged["last_sanitized_index"] = existing_count + len(merged[messages_key])
@@ -103,7 +106,7 @@ def _merge_tool_result(
                 graph=result.graph,
                 update={
                     messages_key: update,
-                    "placeholder_map": ctx.placeholder_map,
+                    "placeholder_map": map_delta,
                     "security_summary": ctx.security_summary,
                     "last_sanitized_index": existing_count + len(update),
                 },
@@ -116,7 +119,7 @@ def _merge_tool_result(
         return Command(
             update={
                 messages_key: [result],
-                "placeholder_map": ctx.placeholder_map,
+                "placeholder_map": map_delta,
                 "security_summary": ctx.security_summary,
                 "last_sanitized_index": existing_count + 1,
             }
@@ -124,7 +127,17 @@ def _merge_tool_result(
 
     # Fallback: mutate state
     if isinstance(state, dict):
-        state["placeholder_map"] = ctx.placeholder_map
+        merged_map = dict(state.get("placeholder_map") or {})
+        merged_map.update(map_delta)
+        state["placeholder_map"] = merged_map
         state["security_summary"] = ctx.security_summary
         state["last_sanitized_index"] = existing_count + 1
     return result
+
+
+def _map_delta(base: Dict[str, str], updated: Dict[str, str]) -> Dict[str, str]:
+    delta: Dict[str, str] = {}
+    for k, v in updated.items():
+        if base.get(k) != v:
+            delta[k] = v
+    return delta
