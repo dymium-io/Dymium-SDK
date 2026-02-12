@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dymium.io/schema/tool_result.schema.json",
+  "title": "ToolResult",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "name", "result"],
+  "properties": {
+    "id": { "type": "string" },
+    "name": { "type": "string" },
+    "result": {}
+  }
+}

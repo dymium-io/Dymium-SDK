@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dymium.io/schema/chat_request.schema.json",
+  "title": "ChatRequest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["messages"],
+  "properties": {
+    "messages": {
+      "type": "array",
+      "items": { "$ref": "chat_event.schema.json" }
+    },
+    "recursion_limit": { "type": "integer", "minimum": 1 },
+    "piiOptions": { "type": "object", "additionalProperties": true },
+    "placeholderMap": { "$ref": "placeholder_map.schema.json" },
+    "toolSettings": { "$ref": "tool_settings.schema.json" },
+    "tool_choice": { "type": ["object", "string"] },
+    "llm": { "type": "string" },
+    "timeZone": { "type": "string" }
+  }
+}

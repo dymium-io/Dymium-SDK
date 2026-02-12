@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PYTHON_BIN="$ROOT_DIR/.venv/bin/python"
+
+if [[ ! -x "$PYTHON_BIN" ]]; then
+  if command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN="python3"
+  else
+    echo "python3 not found" >&2
+    exit 1
+  fi
+fi
+
+if [[ -z "${OPENAI_API_KEY:-}" ]]; then
+  echo "Missing env var: OPENAI_API_KEY" >&2
+  exit 1
+fi
+
+export PRESIDIO_URL="${PRESIDIO_URL:-http://localhost:5000}"
+
+"$PYTHON_BIN" -m pip install -e "$ROOT_DIR/python[test]" langchain langgraph langchain-openai >/dev/null
+
+docker compose -f "$ROOT_DIR/utilities/docker-compose.presidio.yml" up -d presidio-analyzer >/dev/null
+
+"$PYTHON_BIN" "$ROOT_DIR/tests/run_langgraph_agent_demo.py"

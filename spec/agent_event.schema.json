@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dymium.io/schema/agent_event.schema.json",
+  "title": "AgentEvent",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "description": "Event type (e.g., agent.tool.progress, agent.placeholders, delta, done, error)"
+    },
+    "data": { "type": "object" },
+    "sequence": { "type": "integer" }
+  }
+}

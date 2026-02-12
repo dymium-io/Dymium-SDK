@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dymium.io/schema/tool_settings.schema.json",
+  "title": "ToolSettings",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "biFunctionsEnabled": { "type": "boolean" },
+    "webSearchEnabled": { "type": "boolean" },
+    "imageGenEnabled": { "type": "boolean" }
+  }
+}

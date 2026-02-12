@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SPEC_DIR="$ROOT_DIR/spec"
+PY_OUT="$ROOT_DIR/python/dymium/types"
+TMP_SPEC_DIR="$ROOT_DIR/.tmp_spec_types"
+
+if [ ! -d "$SPEC_DIR" ]; then
+  echo "Spec directory not found: $SPEC_DIR" >&2
+  exit 1
+fi
+
+mkdir -p "$PY_OUT"
+rm -rf "$TMP_SPEC_DIR"
+mkdir -p "$TMP_SPEC_DIR"
+
+# Copy only schema files to avoid parsing README.md as YAML/JSON.
+find "$SPEC_DIR" -maxdepth 1 -type f -name "*.schema.json" -exec cp {} "$TMP_SPEC_DIR" \;
+
+echo "Generating Python types from JSON Schemas..."
+
+if ! python -c "import datamodel_code_generator" >/dev/null 2>&1; then
+  echo "datamodel-code-generator is not installed." >&2
+  echo "Install with: pip install datamodel-code-generator" >&2
+  exit 1
+fi
+
+python -m datamodel_code_generator \
+  --input "$TMP_SPEC_DIR" \
+  --input-file-type jsonschema \
+  --output-model-type pydantic_v2.BaseModel \
+  --use-annotated \
+  --output "$PY_OUT"
+
+cat > "$PY_OUT/__init__.py" <<'PY'
+"""Generated types from sdk/spec (do not edit by hand)."""
+
+from .agent_event_schema import AgentEvent
+from .chat_event_schema import ChatEvent
+from .chat_request_schema import ChatRequest
+from .placeholder_map_schema import PlaceholderMap, PlaceholderMapItem
+from .tool_call_schema import ToolCall
+from .tool_definition_schema import ToolDefinition
+from .tool_result_schema import ToolResult
+from .tool_settings_schema import ToolSettings
+
+__all__ = [
+    "AgentEvent",
+    "ChatEvent",
+    "ChatRequest",
+    "PlaceholderMap",
+    "PlaceholderMapItem",
+    "ToolCall",
+    "ToolDefinition",
+    "ToolResult",
+    "ToolSettings",
+]
+PY
+
+echo "Wrote: $PY_OUT"
+
+rm -rf "$TMP_SPEC_DIR"
+
+echo "Go/Rust generators are not implemented yet."

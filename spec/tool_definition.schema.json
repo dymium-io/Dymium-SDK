@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dymium.io/schema/tool_definition.schema.json",
+  "title": "ToolDefinition",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name"],
+  "properties": {
+    "name": { "type": "string" },
+    "description": { "type": "string" },
+    "parameters": { "type": "object" },
+    "source": {
+      "type": "string",
+      "description": "Tool origin (e.g., mcp, builtin, internal, external)."
+    }
+  }
+}

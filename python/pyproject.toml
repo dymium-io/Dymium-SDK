@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=67", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dymium"
+version = "0.0.1"
+description = "Dymium SDK for secure data and AI interactions"
+readme = "README.md"
+requires-python = ">=3.9"
+keywords = ["ai", "pii", "security", "llm", "mcp"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: OS Independent",
+]
+dependencies = [
+  "requests>=2.31.0",
+  "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+test = [
+  "mcp>=1.0.0",
+  "langchain>=0.2.0",
+]
+
+
+[tool.setuptools.packages.find]
+where = [""]

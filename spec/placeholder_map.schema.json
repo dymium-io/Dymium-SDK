@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dymium.io/schema/placeholder_map.schema.json",
+  "title": "PlaceholderMap",
+  "description": "Mapping between placeholders and originals. Supports object-map or array-of-entries forms.",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "Map form: { \"PH_EMAIL_7K3D9\": \"alice@example.com\" }"
+    },
+    {
+      "type": "array",
+      "description": "Entry list form: [{ placeholder, original }, ...]",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["placeholder", "original"],
+        "properties": {
+          "placeholder": { "type": "string" },
+          "original": { "type": "string" }
+        }
+      }
+    }
+  ]
+}

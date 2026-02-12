@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dymium.io/schema/chat_event.schema.json",
+  "title": "ChatEvent",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["role", "content"],
+  "properties": {
+    "id": { "type": ["string", "integer"] },
+    "role": { "type": "string", "enum": ["system", "user", "assistant", "tool"] },
+    "user": { "type": "string" },
+    "content": { "type": "string" },
+    "tool_calls": {
+      "type": "array",
+      "items": { "type": "object", "additionalProperties": true }
+    },
+    "tool_call_id": { "type": "string" },
+    "name": { "type": "string" },
+    "timestamp": { "type": "integer" },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    }
+  }
+}
