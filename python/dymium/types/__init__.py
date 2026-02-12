@@ -3,6 +3,7 @@
 from .agent_event_schema import AgentEvent
 from .chat_event_schema import ChatEvent
 from .chat_request_schema import ChatRequest
+from .detected_entity_schema import DetectedEntity
 from .placeholder_map_schema import PlaceholderMap, PlaceholderMapItem
 from .tool_call_schema import ToolCall
 from .tool_definition_schema import ToolDefinition
@@ -13,6 +14,7 @@ __all__ = [
     "AgentEvent",
     "ChatEvent",
     "ChatRequest",
+    "DetectedEntity",
     "PlaceholderMap",
     "PlaceholderMapItem",
     "ToolCall",

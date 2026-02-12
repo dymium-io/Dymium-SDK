@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dymium.io/schema/detected_entity.schema.json",
+  "title": "DetectedEntity",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type"],
+  "properties": {
+    "type": { "type": "string", "description": "Canonical internal entity type." },
+    "providerType": { "type": "string", "description": "Original detector/provider type label." },
+    "source": { "type": "string", "description": "Detector source identifier." },
+    "score": { "type": "number" },
+    "beginOffset": { "type": "integer", "minimum": 0 },
+    "endOffset": { "type": "integer", "minimum": 0 },
+    "text": { "type": "string" }
+  }
+}

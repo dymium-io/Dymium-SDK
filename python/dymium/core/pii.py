@@ -3,12 +3,21 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, Optional, Protocol
 
+from dymium.types import DetectedEntity
+
 
 class PIIEngine(Protocol):
-    def detect(self, text: str, options: Optional[Dict[str, Any]] = None) -> Iterable[Dict[str, Any]]:
-        """Return detected PII entities."""
+    def detect(
+        self,
+        text: str,
+        options: Optional[Dict[str, Any]] = None,
+    ) -> Iterable[DetectedEntity | Dict[str, Any]]:
+        """Return detected PII entities in canonical DetectedEntity shape."""
         raise NotImplementedError
 
-    def normalize(self, entities: Iterable[Dict[str, Any]]) -> Iterable[Dict[str, Any]]:
-        """Optional normalization step for entity types."""
+    def normalize(
+        self,
+        entities: Iterable[DetectedEntity | Dict[str, Any]],
+    ) -> Iterable[DetectedEntity | Dict[str, Any]]:
+        """Normalize provider-specific entities into canonical DetectedEntity shape."""
         raise NotImplementedError

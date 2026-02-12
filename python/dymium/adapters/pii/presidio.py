@@ -3,16 +3,23 @@
 Expected endpoint:
 - POST {base_url}/analyze
   Payload: {
-    \"text\": \"...\",\n    \"language\": \"en\",\n    \"entities\": [\"EMAIL_ADDRESS\", ...],\n    \"score_threshold\": 0.35\n+  }\n+
+    "text": "...",
+    "language": "en",
+    "entities": ["EMAIL_ADDRESS", ...],
+    "score_threshold": 0.35
+  }
 Response (Presidio standard):
-- [{ \"entity_type\": \"EMAIL_ADDRESS\", \"start\": 10, \"end\": 25, \"score\": 0.98 }, ...]\n+"""
+- [{ "entity_type": "EMAIL_ADDRESS", "start": 10, "end": 25, "score": 0.98 }, ...]
+"""
 from __future__ import annotations
 
 from typing import Any, Dict, Iterable, Optional
 
 import requests
 
+from .common import make_detected_entity, normalize_detected_entities
 from .regex import detect_regex_entities
+
 
 class PresidioDetector:
     def __init__(
@@ -59,7 +66,7 @@ class PresidioDetector:
         return entities
 
     def normalize(self, entities: Iterable[Dict[str, Any]]) -> Iterable[Dict[str, Any]]:
-        return entities
+        return normalize_detected_entities(entities, source="presidio")
 
     @staticmethod
     def _normalize_entity(entity: Dict[str, Any], text: str) -> Dict[str, Any]:
@@ -72,12 +79,11 @@ class PresidioDetector:
         if isinstance(start, int) and isinstance(end, int) and 0 <= start <= end <= len(text):
             snippet = text[start:end]
 
-        normalized = {
-            "type": etype,
-            "score": score,
-            "beginOffset": start,
-            "endOffset": end,
-        }
-        if snippet is not None:
-            normalized["text"] = snippet
-        return normalized
+        return make_detected_entity(
+            entity_type=etype,
+            score=score,
+            begin_offset=start,
+            end_offset=end,
+            text=snippet,
+            source="presidio",
+        )

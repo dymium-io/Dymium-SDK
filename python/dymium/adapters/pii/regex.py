@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, Iterable, List
 
+from .common import make_detected_entity
 
 def detect_regex_entities(text: str, rules: Any | None = None) -> List[Dict[str, Any]]:
     if not text:
@@ -40,13 +41,16 @@ def detect_regex_entities(text: str, rules: Any | None = None) -> List[Dict[str,
             except IndexError:
                 start, end = match.span(0)
             snippet = match.group(group) if group is not None else match.group(0)
-            entities.append({
-                "type": etype,
-                "score": score,
-                "beginOffset": start,
-                "endOffset": end,
-                "text": snippet,
-            })
+            entities.append(
+                make_detected_entity(
+                    entity_type=etype,
+                    score=score,
+                    begin_offset=start,
+                    end_offset=end,
+                    text=snippet,
+                    source="regex",
+                )
+            )
 
     return entities
 

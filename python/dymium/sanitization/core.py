@@ -50,7 +50,7 @@ class Sanitizer:
     ) -> str:
         if not text:
             return ""
-        entities = list(self.pii.detect(text, options=pii_options))
+        entities = _coerce_entities(self.pii.normalize(self.pii.detect(text, options=pii_options)))
         summary = _summarize_entities(entities)
         _merge_entity_summary(ctx.security_summary["input_redaction"]["entities_detected"], summary)
         if summary.get("count", 0) > 0:
@@ -227,7 +227,9 @@ def _sanitize_tool_output(
     if isinstance(tool_output, str):
         if not tool_output:
             return tool_output, None
-        entities = list(sanitizer.pii.detect(tool_output, options=pii_options))
+        entities = _coerce_entities(
+            sanitizer.pii.normalize(sanitizer.pii.detect(tool_output, options=pii_options))
+        )
         if not entities:
             return tool_output, None
         redacted = sanitizer.redaction.placeholderize(tool_output, entities, placeholder_map)
@@ -248,3 +250,16 @@ def _contains_placeholders(obj: Any, placeholder_map: Dict[str, str]) -> bool:
     if isinstance(obj, str):
         return any(ph in obj for ph in placeholder_map.keys())
     return False
+
+
+def _coerce_entities(entities: Iterable[Any]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for ent in entities:
+        if isinstance(ent, dict):
+            out.append(ent)
+            continue
+        if hasattr(ent, "model_dump"):
+            dumped = ent.model_dump()
+            if isinstance(dumped, dict):
+                out.append(dumped)
+    return out

@@ -14,6 +14,7 @@ from typing import Any, Dict, Iterable, Optional
 
 import requests
 
+from .common import make_detected_entity, normalize_detected_entities
 from .regex import detect_regex_entities
 
 class GhostPIIDetector:
@@ -57,7 +58,7 @@ class GhostPIIDetector:
         return out
 
     def normalize(self, entities: Iterable[Dict[str, Any]]) -> Iterable[Dict[str, Any]]:
-        return entities
+        return normalize_detected_entities(entities, source="ghostpii")
 
     @staticmethod
     def _normalize_entity(entity: Dict[str, Any], text: str) -> Dict[str, Any]:
@@ -84,12 +85,11 @@ class GhostPIIDetector:
             if 0 <= start <= end <= len(text):
                 snippet = text[start:end]
 
-        normalized = {
-            "type": etype,
-            "score": score,
-            "beginOffset": start,
-            "endOffset": end,
-        }
-        if snippet is not None:
-            normalized["text"] = snippet
-        return normalized
+        return make_detected_entity(
+            entity_type=etype,
+            score=score,
+            begin_offset=start,
+            end_offset=end,
+            text=snippet,
+            source="ghostpii",
+        )

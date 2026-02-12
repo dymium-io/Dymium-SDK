@@ -7,6 +7,7 @@ Important:
 - Provider-specific formats (OpenAI, Anthropic, Gemini, etc.) are handled in adapters.
 
 Current schemas:
+- `detected_entity.schema.json`
 - `chat_event.schema.json`
 - `chat_request.schema.json`
 - `tool_settings.schema.json`

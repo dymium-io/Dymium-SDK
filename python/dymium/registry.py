@@ -122,6 +122,7 @@ def register_default_adapters() -> None:
         factory=lambda cfg: ComprehendDetector(
             region=cfg["region"],
             credentials=cfg.get("credentials"),
+            endpoint_url=cfg.get("endpoint_url"),
             regex_rules=cfg.get("regex_rules") or cfg.get("regexRules"),
         ),
     )
@@ -132,6 +133,7 @@ def register_default_adapters() -> None:
         factory=lambda cfg: GoogleDLPDetector(
             project_id=cfg["project_id"],
             credentials=cfg.get("credentials"),
+            location_id=cfg.get("location_id"),
             base_url=cfg.get("base_url", "https://dlp.googleapis.com"),
             timeout_s=cfg.get("timeout_s", 10),
             regex_rules=cfg.get("regex_rules") or cfg.get("regexRules"),
@@ -143,8 +145,11 @@ def register_default_adapters() -> None:
         kind="pii",
         factory=lambda cfg: AzurePIIDetector(
             endpoint=cfg["endpoint"],
-            api_key=cfg["api_key"],
+            api_key=cfg.get("api_key"),
+            bearer_token=cfg.get("bearer_token") or cfg.get("token"),
             timeout_s=cfg.get("timeout_s", 10),
+            api_version=cfg.get("api_version", "2022-05-01"),
+            use_legacy_endpoint=cfg.get("use_legacy_endpoint", False),
             regex_rules=cfg.get("regex_rules") or cfg.get("regexRules"),
         ),
     )

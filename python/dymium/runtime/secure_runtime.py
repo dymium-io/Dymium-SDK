@@ -223,7 +223,9 @@ class SecureRuntime(AgentRuntime):
                 continue
             content = msg.get("content")
             if isinstance(content, str) and content:
-                entities = list(self.components.pii.detect(content, options=pii_options))
+                entities = self._coerce_entities(
+                    self.components.pii.normalize(self.components.pii.detect(content, options=pii_options))
+                )
                 if entities:
                     summary["count"] += len(entities)
                     type_counts: Dict[str, int] = summary.get("types", {})
@@ -379,7 +381,9 @@ class SecureRuntime(AgentRuntime):
         if isinstance(tool_output, str):
             if not tool_output:
                 return tool_output, None
-            entities = list(self.components.pii.detect(tool_output, options=pii_options))
+            entities = self._coerce_entities(
+                self.components.pii.normalize(self.components.pii.detect(tool_output, options=pii_options))
+            )
             if not entities:
                 return tool_output, None
             redacted = self.components.redaction.placeholderize(tool_output, entities, placeholder_map)
@@ -432,6 +436,19 @@ class SecureRuntime(AgentRuntime):
         if isinstance(obj, str):
             return any(ph in obj for ph in placeholder_map.keys())
         return False
+
+    @staticmethod
+    def _coerce_entities(entities: Iterable[Any]) -> list[Dict[str, Any]]:
+        out: list[Dict[str, Any]] = []
+        for ent in entities:
+            if isinstance(ent, dict):
+                out.append(ent)
+                continue
+            if hasattr(ent, "model_dump"):
+                dumped = ent.model_dump()
+                if isinstance(dumped, dict):
+                    out.append(dumped)
+        return out
 
     @staticmethod
     def _normalize_tool_calls(tool_calls: Iterable[Dict[str, Any]]) -> list[Dict[str, Any]]:
