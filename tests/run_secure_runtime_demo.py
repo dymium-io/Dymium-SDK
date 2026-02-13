@@ -256,6 +256,13 @@ def _require_reachable(url: str) -> None:
         sys.exit(1)
 
 
+def _extract_last_assistant(messages: list[Any]) -> str:
+    for msg in reversed(messages):
+        if isinstance(msg, dict) and msg.get("role") == "assistant":
+            return msg.get("content", "") or ""
+    return ""
+
+
 def main() -> None:
     _require_env("OPENAI_API_KEY")
     presidio_url = os.getenv("PRESIDIO_URL", "http://localhost:5000")
@@ -296,10 +303,11 @@ def main() -> None:
 
         result = runtime.invoke(request)
 
-        print("Assistant (LLM-visible):")
-        print(result.get("text", ""))
-        print("\nAssistant (deobfuscated):")
-        print(result.get("text_deobfuscated", ""))
+        messages = result.get("messages", []) if isinstance(result, dict) else []
+        assistant_text = _extract_last_assistant(messages) or (result.get("text", "") if isinstance(result, dict) else "")
+
+        print("Assistant (app-visible):")
+        print(assistant_text)
         print("\nSecurity summary:")
         print(result.get("security_summary"))
         print("\nTool calls:")
@@ -344,13 +352,10 @@ def main() -> None:
             print("FAIL: customer_phone was not resolved for request_eta.", file=sys.stderr)
             failures += 1
 
-        llm_visible = result.get("text", "") or ""
-        deobfuscated = result.get("text_deobfuscated", "") or ""
-        if PLACEHOLDER_RE.search(llm_visible) and PLACEHOLDER_RE.search(deobfuscated):
-            print("FAIL: placeholders were not deobfuscated in final response.", file=sys.stderr)
+        final_text = result.get("text", "") or ""
+        if PLACEHOLDER_RE.search(final_text):
+            print("FAIL: placeholders leaked into final response text.", file=sys.stderr)
             failures += 1
-        elif not PLACEHOLDER_RE.search(llm_visible):
-            print("WARN: LLM-visible response contained no placeholders.")
 
         if failures:
             sys.exit(1)

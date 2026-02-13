@@ -115,11 +115,10 @@ class SecureRuntime(AgentRuntime):
                     placeholder_map,
                 )
                 return {
-                    "text": assistant_text,
-                    "text_deobfuscated": display_text,
+                    "text": display_text,
                     "placeholder_map": placeholder_map,
                     "tool_results": tool_results,
-                    "messages": messages,
+                    "messages": self._deobfuscate_messages(messages, placeholder_map),
                     "security_summary": self._build_security_summary(
                         input_entities_summary,
                         tool_entities_summary,
@@ -160,10 +159,9 @@ class SecureRuntime(AgentRuntime):
 
         return {
             "text": "",
-            "text_deobfuscated": "",
             "placeholder_map": placeholder_map,
             "tool_results": tool_results,
-            "messages": messages,
+            "messages": self._deobfuscate_messages(messages, placeholder_map),
             "error": "recursion_limit_exceeded",
             "security_summary": self._build_security_summary(
                 input_entities_summary,
@@ -236,7 +234,36 @@ class SecureRuntime(AgentRuntime):
                 new_msg["content"] = content
             sanitized.append(new_msg)
         return sanitized, placeholder_map
-        return {}
+
+    def _deobfuscate_messages(
+        self,
+        messages: list[Any],
+        placeholder_map: Dict[str, str],
+    ) -> list[Any]:
+        out: list[Any] = []
+        for msg in messages:
+            if not isinstance(msg, dict):
+                out.append(msg)
+                continue
+            updated = dict(msg)
+            content = updated.get("content")
+            if isinstance(content, str):
+                updated["content"] = self.components.redaction.resolve_placeholders(content, placeholder_map)
+            elif isinstance(content, list):
+                parts = []
+                for part in content:
+                    if isinstance(part, dict) and isinstance(part.get("text"), str):
+                        part_updated = dict(part)
+                        part_updated["text"] = self.components.redaction.resolve_placeholders(
+                            part["text"],
+                            placeholder_map,
+                        )
+                        parts.append(part_updated)
+                    else:
+                        parts.append(part)
+                updated["content"] = parts
+            out.append(updated)
+        return out
 
     @staticmethod
     def _extract_tool_calls(resp: Dict[str, Any]) -> list[Dict[str, Any]]:

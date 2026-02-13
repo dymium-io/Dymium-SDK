@@ -4,7 +4,7 @@ Dymium is a security SDK for tool‑using LLM apps. It enforces a strict boundar
 - The LLM only sees placeholderized sensitive values.
 - Placeholders are resolved only at tool execution.
 - Tool outputs are re‑sanitized before the LLM sees them.
-- The caller receives a deobfuscated final answer plus a security summary.
+- The app/caller receives deobfuscated output plus a security summary.
 
 This repo includes:
 - A **Sanitization module** (framework‑agnostic).
@@ -79,9 +79,15 @@ agent = create_agent(
 )
 
 result = agent.invoke({"messages": [{"role": "user", "content": "Find orders for alice@example.com"}]})
-print(result.get("text_deobfuscated"))
+messages = result.get("messages", [])
+last_text = messages[-1].get("content", "") if messages else result.get("text", "")
+print(last_text)
 print(result.get("security_summary"))
 ```
+
+`result["messages"]` is app-visible and deobfuscated.
+
+`result["messages"]` is app-visible and deobfuscated.
 
 ---
 
@@ -91,7 +97,6 @@ print(result.get("security_summary"))
 from dymium.integrations.langgraph import (
     create_sanitized_agent,
     DymiumMessagesState,
-    deobfuscate_last_message,
 )
 from dymium.sanitization import Sanitizer
 from dymium.redaction import RedactionEngine
@@ -117,7 +122,9 @@ result = app.invoke(
     {"messages": [{"role": "user", "content": "Find orders for alice@example.com"}]},
     {"recursion_limit": 12},
 )
-print(deobfuscate_last_message(result, sanitizer).get("text_deobfuscated"))
+messages = result.get("messages", [])
+last_text = messages[-1].get("content", "") if messages else ""
+print(last_text)
 print(result.get("security_summary"))
 ```
 
@@ -158,9 +165,10 @@ async def _run():
 result = asyncio.run(_run())
 text = getattr(getattr(result, "response", None), "content", "") or str(result)
 print(text)
-print(sanitizer.deobfuscate(text, ctx))
 print(ctx.security_summary)
 ```
+
+The returned LlamaIndex response object is app-visible and deobfuscated.
 
 ---
 
@@ -222,9 +230,13 @@ request = {
 }
 
 result = runtime.invoke(request)
-print(result.get("text_deobfuscated"))
+messages = result.get("messages", [])
+last_text = messages[-1].get("content", "") if messages else result.get("text", "")
+print(last_text)
 print(result.get("security_summary"))
 ```
+
+`result["messages"]` is app-visible and deobfuscated.
 
 ---
 

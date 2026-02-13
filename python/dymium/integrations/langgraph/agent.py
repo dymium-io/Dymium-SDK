@@ -1,12 +1,54 @@
 """High-level LangGraph agent builder with Dymium sanitization."""
 from __future__ import annotations
 
-from typing import Any, Dict, Sequence
+from typing import Any, AsyncIterable, Dict, Iterable, Sequence
 
 from dymium.runtime.secure_runtime import DEFAULT_SYSTEM_PROMPT
 from dymium.sanitization import Sanitizer
 
-from .state import DymiumMessagesState, sanitize_state_messages
+from .state import DymiumMessagesState, sanitize_state_messages, deobfuscate_state_messages
+
+
+class SanitizedLangGraphApp:
+    """Thin proxy around compiled LangGraph app that deobfuscates app-visible messages."""
+
+    def __init__(self, app: Any, sanitizer: Sanitizer, *, messages_key: str = "messages") -> None:
+        self._app = app
+        self._sanitizer = sanitizer
+        self._messages_key = messages_key
+
+    def invoke(self, *args: Any, **kwargs: Any) -> Any:
+        result = self._app.invoke(*args, **kwargs)
+        return self._deobfuscate_result(result)
+
+    async def ainvoke(self, *args: Any, **kwargs: Any) -> Any:
+        result = await self._app.ainvoke(*args, **kwargs)
+        return self._deobfuscate_result(result)
+
+    def stream(self, *args: Any, **kwargs: Any) -> Iterable[Any]:
+        for item in self._app.stream(*args, **kwargs):
+            yield self._deobfuscate_result(item)
+
+    async def astream(self, *args: Any, **kwargs: Any) -> AsyncIterable[Any]:
+        async for item in self._app.astream(*args, **kwargs):
+            yield self._deobfuscate_result(item)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._app, name)
+
+    def _deobfuscate_result(self, result: Any) -> Any:
+        if not isinstance(result, dict):
+            return result
+        updates = deobfuscate_state_messages(
+            result,
+            self._sanitizer,
+            messages_key=self._messages_key,
+        )
+        if not updates:
+            return result
+        out = dict(result)
+        out.update(updates)
+        return out
 from .tools import make_tool_node
 
 
@@ -65,4 +107,8 @@ def create_sanitized_agent(
     graph.add_conditional_edges("model", route, {"tools": "tools", "__end__": END, END: END})
     graph.add_edge("tools", "model")
     graph.set_entry_point("model")
-    return graph.compile()
+    return SanitizedLangGraphApp(
+        graph.compile(),
+        sanitizer,
+        messages_key=messages_key,
+    )

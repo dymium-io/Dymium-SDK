@@ -136,15 +136,30 @@ def deobfuscate_last_message(
     messages = list(state.get(messages_key, []) or [])
     if not messages:
         return {}
+    deob_messages = _deobfuscate_messages(messages, state, sanitizer)
+    if isinstance(state, dict):
+        state[messages_key] = deob_messages
     ctx = SanitizationContext(
         placeholder_map=dict(state.get("placeholder_map") or {}),
         security_summary=ensure_security_summary(state.get("security_summary")),
     )
-    last = messages[-1]
+    last = deob_messages[-1]
     content = _get_message_content(last)
     if isinstance(content, str):
-        return {"text_deobfuscated": sanitizer.deobfuscate(content, ctx)}
+        return {"text": sanitizer.deobfuscate(content, ctx)}
     return {}
+
+
+def deobfuscate_state_messages(
+    state: Dict[str, Any],
+    sanitizer: Sanitizer,
+    *,
+    messages_key: str = "messages",
+) -> Dict[str, Any]:
+    messages = list(state.get(messages_key, []) or [])
+    if not messages:
+        return {}
+    return {messages_key: _deobfuscate_messages(messages, state, sanitizer)}
 
 
 def _ensure_system_message(messages: List[Any], system_prompt: str) -> List[Any]:
@@ -179,9 +194,62 @@ def _get_message_content(msg: Any) -> Any:
     return ""
 
 
+def _set_message_content(msg: Any, content: Any) -> Any:
+    if isinstance(msg, dict):
+        updated = dict(msg)
+        updated["content"] = content
+        return updated
+    if hasattr(msg, "model_copy"):
+        return msg.model_copy(update={"content": content})
+    if hasattr(msg, "copy"):
+        try:
+            return msg.copy(update={"content": content})
+        except Exception:
+            pass
+    if hasattr(msg, "content"):
+        try:
+            setattr(msg, "content", content)
+        except Exception:
+            pass
+    return msg
+
+
 def _map_delta(base: Dict[str, str], updated: Dict[str, str]) -> Dict[str, str]:
     delta: Dict[str, str] = {}
     for k, v in updated.items():
         if base.get(k) != v:
             delta[k] = v
     return delta
+
+
+def _deobfuscate_messages(
+    messages: List[Any],
+    state: Dict[str, Any],
+    sanitizer: Sanitizer,
+) -> List[Any]:
+    ctx = SanitizationContext(
+        placeholder_map=dict(state.get("placeholder_map") or {}),
+        security_summary=ensure_security_summary(state.get("security_summary")),
+    )
+    out: List[Any] = []
+    for msg in messages:
+        content = _get_message_content(msg)
+        out.append(_set_message_content(msg, _deobfuscate_content(content, sanitizer, ctx)))
+    return out
+
+
+def _deobfuscate_content(content: Any, sanitizer: Sanitizer, ctx: SanitizationContext) -> Any:
+    if isinstance(content, str):
+        return sanitizer.deobfuscate(content, ctx)
+    if isinstance(content, list):
+        out = []
+        for part in content:
+            if isinstance(part, dict):
+                updated = dict(part)
+                if isinstance(updated.get("text"), str):
+                    updated["text"] = sanitizer.deobfuscate(updated["text"], ctx)
+                out.append(updated)
+                continue
+            out.append(part)
+        return out
+    return content

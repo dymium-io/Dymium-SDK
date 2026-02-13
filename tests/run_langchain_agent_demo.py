@@ -181,11 +181,11 @@ def main() -> None:
 
     messages = result.get("messages", []) if isinstance(result, dict) else []
     assistant_text = _extract_last_assistant(messages)
+    if not assistant_text and isinstance(result, dict):
+        assistant_text = result.get("text", "") or ""
 
-    print("Assistant (LLM-visible):")
+    print("Assistant (app-visible):")
     print(assistant_text)
-    print("\nAssistant (deobfuscated):")
-    print(result.get("text_deobfuscated"))
     print("\nSecurity summary:")
     print(result.get("security_summary"))
     print("\nTool calls:")

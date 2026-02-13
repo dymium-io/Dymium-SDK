@@ -1,8 +1,9 @@
 import os
+import re
 import sys
 from typing import Any
 
-from dymium.integrations.langgraph import create_sanitized_agent, deobfuscate_last_message, DymiumMessagesState
+from dymium.integrations.langgraph import create_sanitized_agent, DymiumMessagesState
 from dymium.sanitization import Sanitizer
 from dymium.redaction import RedactionEngine
 from dymium.detectors.pii import PresidioDetector
@@ -13,6 +14,7 @@ GraphState = DymiumMessagesState
 
 
 CALLS: list[tuple[str, dict[str, Any]]] = []
+PLACEHOLDER_RE = re.compile(r"PH_[A-Z]+_[A-Z0-9]{5}")
 
 
 @tool
@@ -162,17 +164,22 @@ def main() -> None:
     result = app.invoke(raw_inputs, {"recursion_limit": 25})
     messages = result.get("messages", [])
 
-    deob = deobfuscate_last_message(result, sanitizer)
-    print("Assistant (LLM-visible):")
+    print("Assistant (app-visible):")
     last = messages[-1]
     content = last.get("content") if isinstance(last, dict) else getattr(last, "content", "")
     print(content)
-    print("\nAssistant (deobfuscated):")
-    print(deob.get("text_deobfuscated"))
     print("\nSecurity summary:")
     print(result.get("security_summary"))
     print("\nTool calls:")
     print(CALLS)
+
+    if not CALLS:
+        print("\nFAIL: No tools were called. Ensure your model supports tool calling.", file=sys.stderr)
+        sys.exit(1)
+
+    if isinstance(content, str) and PLACEHOLDER_RE.search(content):
+        print("\nFAIL: placeholders leaked into final assistant response.", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

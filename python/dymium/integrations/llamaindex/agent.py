@@ -1,6 +1,7 @@
 """High-level LlamaIndex agent workflow helper."""
 from __future__ import annotations
 
+import inspect
 from typing import Any, Iterable
 
 from dymium.runtime.secure_runtime import DEFAULT_SYSTEM_PROMPT
@@ -33,7 +34,13 @@ class SanitizedAgentWorkflow:
         safe_history = None
         if chat_history is not None:
             safe_history = self._sanitizer.sanitize_messages(chat_history, self._ctx)
-        return self._workflow.run(user_msg=safe_user_msg, chat_history=safe_history, **kwargs)
+        result = self._workflow.run(user_msg=safe_user_msg, chat_history=safe_history, **kwargs)
+        if inspect.isawaitable(result):
+            async def _await_result() -> Any:
+                resolved = await result
+                return self._deobfuscate_result(resolved)
+            return _await_result()
+        return self._deobfuscate_result(result)
 
     def _sanitize_message(self, msg: Any) -> Any:
         if msg is None:
@@ -42,6 +49,31 @@ class SanitizedAgentWorkflow:
             return self._sanitizer.sanitize_text(msg, self._ctx)
         out = self._sanitizer.sanitize_messages([msg], self._ctx)
         return out[0] if out else msg
+
+    def _deobfuscate_result(self, result: Any) -> Any:
+        if isinstance(result, str):
+            return self._sanitizer.deobfuscate(result, self._ctx)
+        if isinstance(result, dict):
+            return _deobfuscate_dict(result, self._sanitizer, self._ctx)
+
+        response = getattr(result, "response", None)
+        if isinstance(response, str):
+            try:
+                setattr(result, "response", self._sanitizer.deobfuscate(response, self._ctx))
+            except Exception:
+                pass
+        elif hasattr(response, "content") and isinstance(getattr(response, "content", None), str):
+            try:
+                response.content = self._sanitizer.deobfuscate(response.content, self._ctx)
+            except Exception:
+                pass
+
+        if hasattr(result, "content") and isinstance(getattr(result, "content", None), str):
+            try:
+                result.content = self._sanitizer.deobfuscate(result.content, self._ctx)
+            except Exception:
+                pass
+        return result
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._workflow, name)
@@ -79,3 +111,39 @@ def create_sanitized_agent_workflow(
         **kwargs,
     )
     return SanitizedAgentWorkflow(workflow, sanitizer, ctx)
+
+
+def _deobfuscate_dict(
+    value: dict[str, Any],
+    sanitizer: Sanitizer,
+    ctx: SanitizationContext,
+) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for k, v in value.items():
+        if isinstance(v, str):
+            out[k] = sanitizer.deobfuscate(v, ctx)
+        elif isinstance(v, dict):
+            out[k] = _deobfuscate_dict(v, sanitizer, ctx)
+        elif isinstance(v, list):
+            out[k] = _deobfuscate_list(v, sanitizer, ctx)
+        else:
+            out[k] = v
+    return out
+
+
+def _deobfuscate_list(
+    value: list[Any],
+    sanitizer: Sanitizer,
+    ctx: SanitizationContext,
+) -> list[Any]:
+    out: list[Any] = []
+    for item in value:
+        if isinstance(item, str):
+            out.append(sanitizer.deobfuscate(item, ctx))
+        elif isinstance(item, dict):
+            out.append(_deobfuscate_dict(item, sanitizer, ctx))
+        elif isinstance(item, list):
+            out.append(_deobfuscate_list(item, sanitizer, ctx))
+        else:
+            out.append(item)
+    return out

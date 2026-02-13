@@ -90,7 +90,7 @@ class DymiumState(TypedDict, total=False):
     messages: Annotated[List[Any], add_messages]
     placeholder_map: Annotated[Dict[str, str], _merge_placeholder_maps]
     security_summary: Annotated[Dict[str, Any], _merge_security_summaries]
-    text_deobfuscated: str
+    text: str
     last_sanitized_index: Annotated[int, _max_int]
 
 
@@ -256,10 +256,16 @@ class DymiumMiddleware:  # runtime import of AgentMiddleware below
         messages = list(state.get("messages", []) or [])
         if not messages:
             return {}
-        last = messages[-1]
+        deob_messages = []
+        for msg in messages:
+            content = _get_message_content(msg)
+            deob_messages.append(_set_message_content(msg, _deobfuscate_content(content, self.sanitizer, ctx)))
+
+        state["messages"] = deob_messages
+        last = deob_messages[-1]
         content = _get_message_content(last)
         if isinstance(content, str):
-            return {"text_deobfuscated": self.sanitizer.deobfuscate(content, ctx)}
+            return {"text": content}
         return {}
 
 
@@ -313,6 +319,23 @@ def _set_message_content(msg: Any, content: Any) -> Any:
         except Exception:
             pass
     return msg
+
+
+def _deobfuscate_content(content: Any, sanitizer: Sanitizer, ctx: SanitizationContext) -> Any:
+    if isinstance(content, str):
+        return sanitizer.deobfuscate(content, ctx)
+    if isinstance(content, list):
+        out = []
+        for part in content:
+            if isinstance(part, dict):
+                new_part = dict(part)
+                if isinstance(new_part.get("text"), str):
+                    new_part["text"] = sanitizer.deobfuscate(new_part["text"], ctx)
+                out.append(new_part)
+                continue
+            out.append(part)
+        return out
+    return content
 
 
 def _extract_tool_name(tool_call: Any) -> str | None:

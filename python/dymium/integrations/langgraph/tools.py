@@ -93,19 +93,22 @@ def _merge_tool_result(
         update = result.update
         if isinstance(update, dict):
             merged = dict(update)
+            if messages_key in merged and isinstance(merged[messages_key], list):
+                merged[messages_key] = _set_messages_content(merged[messages_key], sanitized)
             merged["placeholder_map"] = map_delta
             merged["security_summary"] = ctx.security_summary
             if messages_key in merged and isinstance(merged[messages_key], list):
                 merged["last_sanitized_index"] = existing_count + len(merged[messages_key])
             return replace(result, update=merged)
         if isinstance(update, list):
+            safe_update = _set_messages_content(update, sanitized)
             return Command(
                 graph=result.graph,
                 update={
-                    messages_key: update,
+                    messages_key: safe_update,
                     "placeholder_map": map_delta,
                     "security_summary": ctx.security_summary,
-                    "last_sanitized_index": existing_count + len(update),
+                    "last_sanitized_index": existing_count + len(safe_update),
                 },
                 resume=result.resume,
                 goto=result.goto,
@@ -113,9 +116,10 @@ def _merge_tool_result(
         return result
 
     if Command is not None:
+        safe_result = _set_result_content(result, sanitized)
         return Command(
             update={
-                messages_key: [result],
+                messages_key: [safe_result],
                 "placeholder_map": map_delta,
                 "security_summary": ctx.security_summary,
                 "last_sanitized_index": existing_count + 1,
@@ -129,7 +133,7 @@ def _merge_tool_result(
         state["placeholder_map"] = merged_map
         state["security_summary"] = ctx.security_summary
         state["last_sanitized_index"] = existing_count + 1
-    return result
+    return _set_result_content(result, sanitized)
 
 
 def _map_delta(base: Dict[str, str], updated: Dict[str, str]) -> Dict[str, str]:
@@ -138,3 +142,27 @@ def _map_delta(base: Dict[str, str], updated: Dict[str, str]) -> Dict[str, str]:
         if base.get(k) != v:
             delta[k] = v
     return delta
+
+
+def _set_messages_content(messages: list[Any], content: Any) -> list[Any]:
+    return [_set_result_content(msg, content) for msg in messages]
+
+
+def _set_result_content(result: Any, content: Any) -> Any:
+    if isinstance(result, dict):
+        updated = dict(result)
+        updated["content"] = content
+        return updated
+    if hasattr(result, "model_copy"):
+        return result.model_copy(update={"content": content})
+    if hasattr(result, "copy"):
+        try:
+            return result.copy(update={"content": content})
+        except Exception:
+            pass
+    if hasattr(result, "content"):
+        try:
+            setattr(result, "content", content)
+        except Exception:
+            pass
+    return result

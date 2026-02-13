@@ -144,11 +144,8 @@ def main() -> None:
     response = asyncio.run(_run())
     text = getattr(getattr(response, "response", None), "content", "") or str(response)
 
-    print("Assistant (LLM-visible):")
+    print("Assistant (app-visible):")
     print(text)
-    print("\nAssistant (deobfuscated):")
-    deobfuscated = sanitizer.deobfuscate(text, ctx)
-    print(deobfuscated)
     print("\nSecurity summary:")
     print(ctx.security_summary)
     print("\nTool calls:")
@@ -197,6 +194,10 @@ def main() -> None:
         failures += 1
     else:
         print("PASS: carrier_phone resolved for request_eta.")
+
+    if PLACEHOLDER_RE.search(text):
+        print("FAIL: placeholders leaked into final assistant response.", file=sys.stderr)
+        failures += 1
 
     if failures or missing:
         sys.exit(1)
