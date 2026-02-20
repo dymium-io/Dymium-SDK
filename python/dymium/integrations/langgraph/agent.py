@@ -61,6 +61,7 @@ def create_sanitized_agent(
     messages_key: str = "messages",
     state_schema: Any = DymiumMessagesState,
     max_tool_calls: int | None = None,
+    tool_types: Dict[str, str] | None = None,
 ):
     """Create a compiled LangGraph app with sanitized model and tool boundaries."""
     try:
@@ -76,6 +77,7 @@ def create_sanitized_agent(
         tools,
         sanitizer,
         messages_key=messages_key,
+        tool_types=tool_types,
     )
 
     def model_node(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -97,7 +99,7 @@ def create_sanitized_agent(
         next_node = tools_condition(state, messages_key=messages_key)
         if next_node == "tools" and max_tool_calls is not None:
             tool_usage = (state.get("security_summary") or {}).get("tool_usage", {})
-            if int(tool_usage.get("tool_calls_count", 0)) >= int(max_tool_calls):
+            if len(tool_usage.get("tool_calls") or []) >= int(max_tool_calls):
                 return "__end__"
         return next_node
 

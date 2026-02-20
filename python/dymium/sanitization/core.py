@@ -5,12 +5,19 @@ into any orchestration framework.
 """
 from __future__ import annotations
 
+import ast
 from dataclasses import dataclass, field
+import json
+import re
 from typing import Any, Dict, Iterable, List, Tuple
 
 from dymium.core.pii import PIIEngine
 from dymium.core.redaction import RedactionEngineProtocol
 from dymium.redaction import RedactionEngine
+from dymium.tools import TOOL_TYPE_AGENTIC, normalize_tool_type
+
+
+PLACEHOLDER_RE = re.compile(r"\bPH_[A-Z]+_[A-Z0-9]{5}\b")
 
 
 def ensure_security_summary(summary: Dict[str, Any] | None = None) -> Dict[str, Any]:
@@ -22,8 +29,7 @@ def ensure_security_summary(summary: Dict[str, Any] | None = None) -> Dict[str, 
             "sensitive_detected": False,
         },
         "tool_usage": {
-            "tools_called": [],
-            "tool_calls_count": 0,
+            "tool_calls": [],
             "sensitive_inputs_protected": False,
             "sensitive_outputs_protected": False,
             "entities_detected_in_tool_outputs": [],
@@ -49,7 +55,10 @@ class Sanitizer:
     ) -> str:
         if not text:
             return ""
-        entities = _coerce_entities(self.pii.normalize(self.pii.detect(text)))
+        entities = _drop_placeholder_entities(
+            _coerce_entities(self.pii.normalize(self.pii.detect(text))),
+            text,
+        )
         summary = _summarize_entities(entities)
         _merge_entity_summary(ctx.security_summary["input_redaction"]["entities_detected"], summary)
         if summary.get("count", 0) > 0:
@@ -72,9 +81,17 @@ class Sanitizer:
             sanitized.append(_set_message_content(msg, new_content))
         return sanitized
 
-    def resolve_for_tool(self, args: Any, ctx: SanitizationContext) -> Any:
+    def resolve_for_tool(
+        self,
+        args: Any,
+        ctx: SanitizationContext,
+        *,
+        tool_type: str | None = None,
+    ) -> Any:
         if _contains_placeholders(args, ctx.placeholder_map):
             ctx.security_summary["tool_usage"]["sensitive_inputs_protected"] = True
+        if normalize_tool_type(tool_type) == TOOL_TYPE_AGENTIC:
+            return args
         return _resolve_obj(args, ctx.placeholder_map, self.redaction)
 
     def sanitize_tool_output(
@@ -82,7 +99,15 @@ class Sanitizer:
         tool_output: Any,
         ctx: SanitizationContext,
         tool_name: str | None = None,
+        *,
+        tool_type: str | None = None,
     ) -> Any:
+        if normalize_tool_type(tool_type) == TOOL_TYPE_AGENTIC:
+            tool_output, placeholder_updates, child_security_summary = _extract_agentic_metadata_from_output(tool_output)
+            if placeholder_updates:
+                ctx.placeholder_map.update(placeholder_updates)
+            if child_security_summary:
+                _merge_security_summary(ctx.security_summary, child_security_summary, parent_tool=tool_name)
         sanitized, summary = _sanitize_tool_output(
             tool_output,
             ctx.placeholder_map,
@@ -100,8 +125,13 @@ class Sanitizer:
     def record_tool_call(self, tool_name: str | None, ctx: SanitizationContext) -> None:
         if not tool_name:
             return
-        ctx.security_summary["tool_usage"]["tools_called"].append(tool_name)
-        ctx.security_summary["tool_usage"]["tool_calls_count"] += 1
+        tool_usage = ctx.security_summary.setdefault("tool_usage", {})
+        calls = tool_usage.setdefault("tool_calls", [])
+        calls.append({
+            "name": tool_name,
+            "scope": "root",
+            "parent_tool": None,
+        })
 
 
 def _summarize_entities(entities: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
@@ -219,8 +249,11 @@ def _sanitize_tool_output(
     if isinstance(tool_output, str):
         if not tool_output:
             return tool_output, None
-        entities = _coerce_entities(
-            sanitizer.pii.normalize(sanitizer.pii.detect(tool_output))
+        entities = _drop_placeholder_entities(
+            _coerce_entities(
+                sanitizer.pii.normalize(sanitizer.pii.detect(tool_output))
+            ),
+            tool_output,
         )
         if not entities:
             return tool_output, None
@@ -254,4 +287,164 @@ def _coerce_entities(entities: Iterable[Any]) -> List[Dict[str, Any]]:
             dumped = ent.model_dump()
             if isinstance(dumped, dict):
                 out.append(dumped)
+    return out
+
+
+def _extract_agentic_metadata_from_output(
+    tool_output: Any,
+) -> tuple[Any, Dict[str, str], Dict[str, Any] | None]:
+    updates: Dict[str, str] = {}
+    child_security_summary = ensure_security_summary()
+    has_child_summary = False
+
+    def walk(value: Any) -> Any:
+        nonlocal has_child_summary
+        if isinstance(value, str):
+            parsed = _parse_mapping_like_string(value)
+            if isinstance(parsed, (dict, list)):
+                return str(walk(parsed))
+            return value
+        if isinstance(value, list):
+            return [walk(item) for item in value]
+        if isinstance(value, dict):
+            cleaned: Dict[str, Any] = {}
+            for key, raw in value.items():
+                if key in ("placeholder_map", "placeholderMap"):
+                    updates.update(_normalize_placeholder_map(raw))
+                    continue
+                if key in ("security_summary", "securitySummary") and isinstance(raw, dict):
+                    _merge_security_summary(child_security_summary, raw)
+                    has_child_summary = True
+                    continue
+                cleaned[key] = walk(raw)
+            return cleaned
+        return value
+
+    cleaned_output = walk(tool_output)
+    return cleaned_output, updates, (child_security_summary if has_child_summary else None)
+
+
+def _parse_mapping_like_string(value: str) -> Any:
+    text = value.strip()
+    if not text or text[0] not in ("{", "["):
+        brace_start = text.find("{")
+        brace_end = text.rfind("}")
+        if brace_start >= 0 and brace_end > brace_start:
+            text = text[brace_start:brace_end + 1]
+        else:
+            return None
+
+    for parser in (json.loads, ast.literal_eval):
+        try:
+            parsed = parser(text)
+            if isinstance(parsed, (dict, list)):
+                return parsed
+        except Exception:
+            continue
+    return None
+
+
+def _normalize_placeholder_map(raw: Any) -> Dict[str, str]:
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return {str(k): str(v) for k, v in raw.items()}
+    if isinstance(raw, list):
+        out: Dict[str, str] = {}
+        for item in raw:
+            if isinstance(item, dict) and "placeholder" in item and "original" in item:
+                out[str(item["placeholder"])] = str(item["original"])
+        return out
+    return {}
+
+
+def _drop_placeholder_entities(entities: List[Dict[str, Any]], text: str) -> List[Dict[str, Any]]:
+    filtered: List[Dict[str, Any]] = []
+    for ent in entities:
+        snippet = _entity_snippet(ent, text)
+        if snippet and PLACEHOLDER_RE.search(snippet):
+            continue
+        filtered.append(ent)
+    return filtered
+
+
+def _entity_snippet(entity: Dict[str, Any], text: str) -> str | None:
+    start = entity.get("start")
+    end = entity.get("end")
+    try:
+        if start is not None and end is not None:
+            start_i = int(start)
+            end_i = int(end)
+            if 0 <= start_i < end_i <= len(text):
+                return text[start_i:end_i]
+    except Exception:
+        pass
+    value = entity.get("text")
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
+def _merge_security_summary(
+    target: Dict[str, Any],
+    delta: Dict[str, Any],
+    *,
+    parent_tool: str | None = None,
+) -> None:
+    target_sum = ensure_security_summary(target)
+    delta_sum = ensure_security_summary(delta)
+
+    target_in = target_sum.get("input_redaction", {})
+    delta_in = delta_sum.get("input_redaction", {})
+    _merge_entity_summary(
+        target_in.setdefault("entities_detected", {"count": 0, "types": {}}),
+        delta_in.get("entities_detected") or {"count": 0, "types": {}},
+    )
+    target_in["sensitive_detected"] = bool(
+        target_in.get("sensitive_detected") or delta_in.get("sensitive_detected")
+    )
+
+    target_tool = target_sum.get("tool_usage", {})
+    delta_tool = delta_sum.get("tool_usage", {})
+    target_tool.setdefault("tool_calls", [])
+    target_tool["tool_calls"].extend(
+        _attach_parent_to_tool_calls(delta_tool.get("tool_calls"), parent_tool=parent_tool)
+    )
+    target_tool["sensitive_inputs_protected"] = bool(
+        target_tool.get("sensitive_inputs_protected") or delta_tool.get("sensitive_inputs_protected")
+    )
+    target_tool["sensitive_outputs_protected"] = bool(
+        target_tool.get("sensitive_outputs_protected") or delta_tool.get("sensitive_outputs_protected")
+    )
+    target_tool.setdefault("entities_detected_in_tool_outputs", [])
+    target_tool["entities_detected_in_tool_outputs"].extend(
+        list(delta_tool.get("entities_detected_in_tool_outputs") or [])
+    )
+
+    target["input_redaction"] = target_in
+    target["tool_usage"] = target_tool
+
+
+def _attach_parent_to_tool_calls(
+    calls: Any,
+    *,
+    parent_tool: str | None = None,
+) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    if not isinstance(calls, list):
+        return out
+    for call in calls:
+        if not isinstance(call, dict):
+            continue
+        name = call.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        merged = dict(call)
+        if parent_tool and not merged.get("parent_tool"):
+            merged["parent_tool"] = parent_tool
+            merged["scope"] = f"{parent_tool}.subagent"
+        else:
+            merged["scope"] = merged.get("scope") or "root"
+            merged["parent_tool"] = merged.get("parent_tool")
+        out.append(merged)
     return out

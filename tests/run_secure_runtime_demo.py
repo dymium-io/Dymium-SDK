@@ -8,8 +8,8 @@ from typing import Any
 
 from dymium import RuntimeConfig, SecureRuntime
 
-CALLS: list[tuple[str, dict[str, Any]]] = []
-OUTPUTS: list[tuple[str, dict[str, Any]]] = []
+MAIN_CALLS: list[tuple[str, dict[str, Any]]] = []
+SUB_CALLS: list[tuple[str, dict[str, Any]]] = []
 PLACEHOLDER_RE = re.compile(r"PH_[A-Z]+_[A-Z0-9]{5}")
 
 
@@ -72,6 +72,20 @@ TOOLS = [
             "required": ["tracking_number", "carrier_phone", "customer_phone"],
         },
     },
+    {
+        "name": "run_carrier_specialist",
+        "description": "Delegate delivery exception handling to specialist operations.",
+        "tool_type": "agentic",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "tracking_number": {"type": "string"},
+                "customer_phone": {"type": "string"},
+                "customer_email": {"type": "string"},
+            },
+            "required": ["tracking_number", "customer_phone", "customer_email"],
+        },
+    },
 ]
 
 
@@ -80,64 +94,111 @@ def _tool_result(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def lookup_customer(email: str) -> dict[str, Any]:
-    CALLS.append(("lookup_customer", {"email": email}))
-    output = {
+    MAIN_CALLS.append(("lookup_customer", {"email": email}))
+    return {
         "customer_id": "CUST-1001",
         "phone": "415-555-0135",
         "email": email,
         "alt_email": "alice.alt@example.com",
     }
-    OUTPUTS.append(("lookup_customer", output))
-    return output
 
 
 def list_recent_orders(customer_id: str) -> dict[str, Any]:
-    CALLS.append(("list_recent_orders", {"customer_id": customer_id}))
-    output = {
+    MAIN_CALLS.append(("list_recent_orders", {"customer_id": customer_id}))
+    return {
         "orders": [
             {"order_id": "ORD-9001", "total": "$120.00"},
             {"order_id": "ORD-9000", "total": "$75.00"},
         ]
     }
-    OUTPUTS.append(("list_recent_orders", output))
-    return output
 
 
 def get_order_details(order_id: str) -> dict[str, Any]:
-    CALLS.append(("get_order_details", {"order_id": order_id}))
-    output = {
+    MAIN_CALLS.append(("get_order_details", {"order_id": order_id}))
+    return {
         "order_id": order_id,
         "tracking_number": "1Z999AA10123456784",
         "warehouse_phone": "415-555-0199",
         "ship_address": "123 Market St, San Francisco, CA",
     }
-    OUTPUTS.append(("get_order_details", output))
-    return output
 
 
 def get_shipping_status(order_id: str, phone: str) -> dict[str, Any]:
-    CALLS.append(("get_shipping_status", {"order_id": order_id, "phone": phone}))
-    output = {"order_id": order_id, "status": "in_transit", "phone": phone}
-    OUTPUTS.append(("get_shipping_status", output))
-    return output
+    MAIN_CALLS.append(("get_shipping_status", {"order_id": order_id, "phone": phone}))
+    return {"order_id": order_id, "status": "in_transit", "phone": phone}
 
 
 def get_carrier_contact(tracking_number: str) -> dict[str, Any]:
-    CALLS.append(("get_carrier_contact", {"tracking_number": tracking_number}))
-    output = {"tracking_number": tracking_number, "carrier": "UPS", "carrier_phone": "800-555-0100"}
-    OUTPUTS.append(("get_carrier_contact", output))
-    return output
+    MAIN_CALLS.append(("get_carrier_contact", {"tracking_number": tracking_number}))
+    return {"tracking_number": tracking_number, "carrier": "UPS", "carrier_phone": "800-555-0100"}
 
 
 def request_eta(tracking_number: str, carrier_phone: str, customer_phone: str) -> dict[str, Any]:
-    CALLS.append(("request_eta", {
+    MAIN_CALLS.append(("request_eta", {
         "tracking_number": tracking_number,
         "carrier_phone": carrier_phone,
         "customer_phone": customer_phone,
     }))
-    output = {"tracking_number": tracking_number, "eta": "2026-02-15", "carrier_phone": carrier_phone}
-    OUTPUTS.append(("request_eta", output))
-    return output
+    return {"tracking_number": tracking_number, "eta": "2026-02-15", "carrier_phone": carrier_phone}
+
+
+def run_carrier_specialist(
+    tracking_number: str,
+    customer_phone: str,
+    customer_email: str,
+    dymium_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    MAIN_CALLS.append(("run_carrier_specialist", {
+        "tracking_number": tracking_number,
+        "customer_phone": customer_phone,
+        "customer_email": customer_email,
+    }))
+    placeholder_map = {}
+    if isinstance(dymium_context, dict):
+        raw_map = dymium_context.get("placeholder_map")
+        if isinstance(raw_map, dict):
+            placeholder_map = {str(k): str(v) for k, v in raw_map.items()}
+
+    def resolve(value: str) -> str:
+        return str(placeholder_map.get(value, value))
+
+    carrier_phone = "800-555-0100"
+    SUB_CALLS.append(("lookup_carrier_sla", {"tracking_number": tracking_number}))
+    SUB_CALLS.append(("open_carrier_callback", {
+        "carrier_phone": carrier_phone,
+        "customer_email": resolve(customer_email),
+    }))
+    SUB_CALLS.append(("create_hold_request", {
+        "tracking_number": tracking_number,
+        "customer_phone": resolve(customer_phone),
+    }))
+
+    child_summary = {
+        "input_redaction": {
+            "entities_detected": {"count": 0, "types": {}},
+            "sensitive_detected": False,
+        },
+        "tool_usage": {
+            "tool_calls": [
+                {"name": "lookup_carrier_sla", "scope": "root", "parent_tool": None},
+                {"name": "open_carrier_callback", "scope": "root", "parent_tool": None},
+                {"name": "create_hold_request", "scope": "root", "parent_tool": None},
+            ],
+            "sensitive_inputs_protected": True,
+            "sensitive_outputs_protected": False,
+            "entities_detected_in_tool_outputs": [],
+        },
+    }
+    if isinstance(dymium_context, dict):
+        dymium_context["placeholder_map"] = placeholder_map
+        dymium_context["security_summary"] = child_summary
+
+    return {
+        "ticket_id": "CB-2210",
+        "hold_request_id": "HOLD-7335",
+        "placeholder_map": placeholder_map,
+        "security_summary": child_summary,
+    }
 
 
 TOOL_FUNCS = {
@@ -147,6 +208,7 @@ TOOL_FUNCS = {
     "get_shipping_status": get_shipping_status,
     "get_carrier_contact": get_carrier_contact,
     "request_eta": request_eta,
+    "run_carrier_specialist": run_carrier_specialist,
 }
 
 
@@ -278,6 +340,7 @@ def main() -> None:
             llm_config={"api_key": os.getenv("OPENAI_API_KEY"), "model": model},
             pii_config={"base_url": presidio_url},
             mcp={"base_url": server.base_url},
+            tool_types={"run_carrier_specialist": "agentic"},
         )
         runtime = SecureRuntime.from_config(config)
 
@@ -293,8 +356,9 @@ def main() -> None:
                         "3) Get order details to retrieve the tracking number and ship contact.\n"
                         "4) Use the tracking number to get the carrier contact phone.\n"
                         "5) Use the carrier phone AND the phone on file to request an ETA.\n"
-                        "6) Check shipping status.\n"
-                        "Summarize order ID, status, ETA, tracking number, and confirm which contact phone was used."
+                        "6) Delegate exception handling to run_carrier_specialist with tracking number, customer phone, and customer email.\n"
+                        "7) Check shipping status.\n"
+                        "Summarize order ID, status, ETA, tracking number, callback ticket, and hold request ID."
                     ),
                 }
             ],
@@ -310,10 +374,8 @@ def main() -> None:
         print(assistant_text)
         print("\nSecurity summary:")
         print(result.get("security_summary"))
-        print("\nTool calls:")
-        print(CALLS)
 
-        if not CALLS:
+        if not MAIN_CALLS:
             print("\nFAIL: No tools were called. Ensure your model supports tool calling.", file=sys.stderr)
             sys.exit(1)
 
@@ -324,21 +386,53 @@ def main() -> None:
             "get_carrier_contact",
             "request_eta",
             "get_shipping_status",
+            "run_carrier_specialist",
         }
-        seen_tools = {name for name, _ in CALLS}
+        seen_tools = {name for name, _ in MAIN_CALLS}
         missing = expected_tools - seen_tools
         failures = 0
         if missing:
             print(f"FAIL: Missing tool calls: {sorted(missing)}", file=sys.stderr)
             failures += 1
 
-        for name, args in CALLS:
+        for name, args in MAIN_CALLS:
+            if name == "run_carrier_specialist":
+                continue
             for key, value in args.items():
                 if isinstance(value, str) and PLACEHOLDER_RE.search(value):
                     print(f"FAIL: Placeholder leaked into tool arg for {name}.{key}: {value}", file=sys.stderr)
                     failures += 1
 
-        req_eta = next((a for n, a in CALLS if n == "request_eta"), None)
+        specialist_args = next((a for n, a in MAIN_CALLS if n == "run_carrier_specialist"), None)
+        if not specialist_args:
+            print("FAIL: run_carrier_specialist not called.", file=sys.stderr)
+            failures += 1
+        elif not any(
+            isinstance(v, str) and PLACEHOLDER_RE.search(v)
+            for k, v in specialist_args.items()
+            if k in {"customer_phone", "customer_email"}
+        ):
+            print("FAIL: run_carrier_specialist did not receive placeholderized sensitive args.", file=sys.stderr)
+            failures += 1
+
+        for name, args in SUB_CALLS:
+            for key, value in args.items():
+                if isinstance(value, str) and key in {"customer_phone", "customer_email"} and PLACEHOLDER_RE.search(value):
+                    print(f"FAIL: Placeholder leaked into sub-agent arg for {name}.{key}: {value}", file=sys.stderr)
+                    failures += 1
+
+        summary_calls = ((result.get("security_summary") or {}).get("tool_usage") or {}).get("tool_calls") or []
+        summary_names = {call.get("name") for call in summary_calls if isinstance(call, dict)}
+        expected_sub = {"lookup_carrier_sla", "open_carrier_callback", "create_hold_request"}
+        missing_sub_summary = expected_sub - summary_names
+        if missing_sub_summary:
+            print(
+                f"FAIL: Sub-agent tools missing from merged security summary: {sorted(missing_sub_summary)}",
+                file=sys.stderr,
+            )
+            failures += 1
+
+        req_eta = next((a for n, a in MAIN_CALLS if n == "request_eta"), None)
         if not req_eta:
             print("FAIL: request_eta not called.", file=sys.stderr)
             failures += 1

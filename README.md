@@ -2,7 +2,9 @@
 
 Dymium is a security SDK for tool‑using LLM apps. It enforces a strict boundary:
 - The LLM only sees placeholderized sensitive values.
-- Placeholders are resolved only at tool execution.
+- Tool type controls the boundary:
+  - `non_agentic`: placeholders are resolved only at execution time.
+  - `agentic`: placeholders are passed through to the delegated agent/tool runtime.
 - Tool outputs are re‑sanitized before the LLM sees them.
 - The app/caller receives deobfuscated output plus a security summary.
 
@@ -56,6 +58,45 @@ final_text = sanitizer.deobfuscate("Email sent to PH_EMAIL_ABCDE", ctx)
 
 ---
 
+## Tool Types (Optional)
+
+`tool_type` controls placeholder handling at tool boundaries:
+- `non_agentic` (default): resolve placeholders before the tool call.
+- `agentic`: pass placeholders through unchanged and pass runtime context to the delegated agent/tool.
+
+This behavior is supported in `SecureRuntime`, `LangChain`, `LangGraph`, and `LlamaIndex` integrations.
+
+For `agentic` tools, Dymium passes `dymium_context` with:
+- `placeholder_map`
+- `security_summary`
+
+When the delegated runtime updates those fields, Dymium merges them back into the parent flow.
+
+For in-process `LangChain`/`LangGraph` sub-agent handoffs where both parent and child use `DymiumMiddleware`,
+this propagation/merge is automatic.
+
+For remote or non-Dymium child runtimes, use explicit forwarding:
+
+```python
+def delegate_to_subagent(query: str, dymium_context: dict | None = None) -> dict:
+    placeholder_map = (dymium_context or {}).get("placeholder_map", {})
+    security_summary = (dymium_context or {}).get("security_summary", {})
+
+    sub_result = sub_agent.invoke({
+        "messages": [{"role": "user", "content": query}],
+        "placeholder_map": placeholder_map,
+        "security_summary": security_summary,
+    })
+
+    if isinstance(dymium_context, dict):
+        dymium_context["placeholder_map"] = sub_result.get("placeholder_map", {})
+        dymium_context["security_summary"] = sub_result.get("security_summary", {})
+
+    return {"result": sub_result.get("text", "")}
+```
+
+---
+
 ## LangChain Integration
 
 ```python
@@ -70,7 +111,10 @@ sanitizer = Sanitizer(
     redaction=RedactionEngine(),
 )
 
-middleware = DymiumMiddleware(sanitizer).middleware()
+middleware = DymiumMiddleware(
+    sanitizer,
+    tool_types={"delegate_to_subagent": "agentic"},  # optional
+).middleware()
 
 agent = create_agent(
     model="openai:gpt-5",
@@ -114,6 +158,7 @@ app = create_sanitized_agent(
     sanitizer=sanitizer,
     state_schema=DymiumMessagesState,
     max_tool_calls=10,
+    tool_types={"delegate_to_subagent": "agentic"},  # optional
 )
 
 result = app.invoke(
@@ -155,6 +200,7 @@ workflow = create_sanitized_agent_workflow(
     llm=llm,
     sanitizer=sanitizer,
     ctx=ctx,
+    tool_types={"delegate_to_subagent": "agentic"},  # optional
 )
 
 async def _run():
@@ -210,9 +256,11 @@ config = RuntimeConfig(
                 "properties": {"email": {"type": "string"}},
                 "required": ["email"],
             },
+            "tool_type": "non_agentic",
             "handler": lookup_customer,
         }
     ],
+    tool_types={"delegate_to_subagent": "agentic"},  # optional per-tool override
 )
 
 # Optional: add MCP alongside local tools.

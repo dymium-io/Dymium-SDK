@@ -14,7 +14,22 @@ if [[ ! -x "$PYTHON_BIN" ]]; then
 fi
 
 if [[ -z "${OPENAI_API_KEY:-}" ]]; then
-  echo "Missing env var: OPENAI_API_KEY" >&2
+  KEY_FILE_CANDIDATES=(
+    "/home/dennis/Work/openai_api_key.txt"
+    "$HOME/Work/openai_api_key.txt"
+    "$ROOT_DIR/../openai_api_key.txt"
+  )
+  for key_file in "${KEY_FILE_CANDIDATES[@]}"; do
+    if [[ -f "$key_file" ]]; then
+      OPENAI_API_KEY="$(tr -d '\r\n' < "$key_file")"
+      export OPENAI_API_KEY
+      break
+    fi
+  done
+fi
+
+if [[ -z "${OPENAI_API_KEY:-}" ]]; then
+  echo "Missing OPENAI_API_KEY and no key file found." >&2
   exit 1
 fi
 

@@ -44,6 +44,7 @@ class MultiMCPAdapter:
                     "description": tool.get("description"),
                     "parameters": tool.get("parameters"),
                     "source": tool.get("source", "mcp"),
+                    "tool_type": tool.get("tool_type"),
                 })
         return out
 

@@ -86,6 +86,7 @@ def create_sanitized_agent_workflow(
     *,
     ctx: SanitizationContext | None = None,
     system_prompt: str | None = DEFAULT_SYSTEM_PROMPT,
+    tool_types: dict[str, str] | None = None,
     **kwargs: Any,
 ) -> Any:
     try:
@@ -102,7 +103,12 @@ def create_sanitized_agent_workflow(
         ctx=ctx,
         system_prompt=system_prompt,
     )
-    safe_tools = wrap_tools(tools_or_functions, sanitizer, ctx)
+    safe_tools = wrap_tools(
+        tools_or_functions,
+        sanitizer,
+        ctx,
+        tool_types=tool_types,
+    )
 
     workflow = AgentWorkflow.from_tools_or_functions(
         list(safe_tools),

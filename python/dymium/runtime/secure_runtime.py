@@ -7,8 +7,10 @@ from dymium.core.contracts import AgentRuntime, RuntimeComponents
 from dymium.config import RuntimeConfig
 from dymium.registry import GLOBAL_REGISTRY, register_default_adapters
 from dymium.redaction import RedactionEngine
+from dymium.sanitization import ensure_security_summary
 from dymium.types import ChatRequest
 from dymium.adapters.tools import CombinedToolAdapter, LocalToolAdapter
+from dymium.tools import TOOL_TYPE_AGENTIC, normalize_tool_type
 
 
 DEFAULT_SYSTEM_PROMPT = (
@@ -27,9 +29,10 @@ DEFAULT_SYSTEM_PROMPT = (
     "- If a task requires properties of a placeholdered value (e.g., checking "
     "an email domain, formatting, or validity), refuse and explain that you "
     "cannot access the underlying value.\n"
-    "- You may call tools. Tool inputs may include placeholders and will be "
-    "resolved by the runtime at execution time. Tool outputs may include "
-    "placeholders; keep them as-is.\n"
+    "- You may call tools. Tool inputs may include placeholders. Non-agentic "
+    "tool inputs are resolved by the runtime at execution time; agentic tools "
+    "may receive placeholders directly. Tool outputs may include placeholders; "
+    "keep them as-is.\n"
 )
 
 
@@ -44,8 +47,12 @@ class SecureRuntime(AgentRuntime):
     - stream placeholder updates to the caller
     """
 
-    def __init__(self, components: RuntimeComponents) -> None:
+    def __init__(self, components: RuntimeComponents, *, tool_types: Dict[str, str] | None = None) -> None:
         self.components = components
+        self._tool_types = {
+            str(k): normalize_tool_type(v)
+            for k, v in (tool_types or {}).items()
+        }
 
     @classmethod
     def from_config(cls, config: RuntimeConfig) -> "SecureRuntime":
@@ -57,12 +64,14 @@ class SecureRuntime(AgentRuntime):
         tools = cls._build_tools(config)
         redaction = RedactionEngine()
         components = RuntimeComponents(llm=llm, pii=pii, redaction=redaction, tools=tools)
-        return cls(components)
+        return cls(components, tool_types=config.tool_types)
 
     def run(self, request: ChatRequest | Dict[str, Any]) -> Dict[str, Any]:
         if hasattr(request, "model_dump"):
             request = request.model_dump()
-        placeholder_map = self._normalize_placeholder_map(request.get("placeholderMap"))
+        placeholder_map = self._normalize_placeholder_map(
+            request.get("placeholderMap") or request.get("placeholder_map")
+        )
         input_entities_summary = {"count": 0, "types": {}}
         tool_entities_summary: list[Dict[str, Any]] = []
         tool_calls_history: list[Dict[str, Any]] = []
@@ -94,6 +103,7 @@ class SecureRuntime(AgentRuntime):
             max_steps = 3
         tool_results = []
         tool_defs = list(self.components.tools.list_tools() or [])
+        tool_types = self._tool_types_by_name(tool_defs)
         for _ in range(max_steps):
             llm_request: Dict[str, Any] = {"messages": messages}
             if tool_defs:
@@ -127,7 +137,13 @@ class SecureRuntime(AgentRuntime):
                         tool_outputs_protected,
                     ),
                 }
-            tool_calls_history.extend(tool_calls)
+            for tc in tool_calls:
+                if isinstance(tc, dict) and isinstance(tc.get("name"), str):
+                    tool_calls_history.append({
+                        "name": tc.get("name"),
+                        "parent_tool": None,
+                        "scope": "root",
+                    })
 
             # Add assistant tool call message before tool responses (OpenAI-compatible).
             messages.append({
@@ -137,14 +153,53 @@ class SecureRuntime(AgentRuntime):
             })
 
             for tc in tool_calls:
+                tool_type = normalize_tool_type(tool_types.get(tc.get("name")))
                 if self._contains_placeholders(tc.get("arguments"), placeholder_map):
                     tool_inputs_protected = True
-                resolved_tc = self._resolve_tool_call(tc, placeholder_map)
-                result = self.components.tools.execute(resolved_tc, {"placeholder_map": placeholder_map})
+                execute_tc = self._prepare_tool_call_for_execution(tc, placeholder_map, tool_type=tool_type)
+                agentic_ctx: Dict[str, Any] | None = None
+                if tool_type == TOOL_TYPE_AGENTIC:
+                    execute_tc, agentic_ctx = self._attach_agentic_context(
+                        execute_tc,
+                        placeholder_map,
+                    )
+                result = self.components.tools.execute(execute_tc, {
+                    "placeholder_map": placeholder_map,
+                    "dymium_context": agentic_ctx or {},
+                })
+                if tool_type == TOOL_TYPE_AGENTIC:
+                    if isinstance(agentic_ctx, dict) and not self._has_agentic_metadata(result):
+                        child_map = self._normalize_placeholder_map(agentic_ctx.get("placeholder_map"))
+                        if child_map:
+                            placeholder_map.update(child_map)
+                        child_summary_ctx = agentic_ctx.get("security_summary")
+                        if isinstance(child_summary_ctx, dict):
+                            tool_inputs_protected, tool_outputs_protected = self._merge_child_security_summary(
+                                child_summary_ctx,
+                                input_entities_summary,
+                                tool_entities_summary,
+                                tool_calls_history,
+                                parent_tool_name=execute_tc.get("name"),
+                                tool_inputs_protected=tool_inputs_protected,
+                                tool_outputs_protected=tool_outputs_protected,
+                            )
+                    result, map_updates, child_security_summary = self._extract_agentic_metadata_from_tool_result(result)
+                    if map_updates:
+                        placeholder_map.update(map_updates)
+                    if child_security_summary:
+                        tool_inputs_protected, tool_outputs_protected = self._merge_child_security_summary(
+                            child_security_summary,
+                            input_entities_summary,
+                            tool_entities_summary,
+                            tool_calls_history,
+                            parent_tool_name=execute_tc.get("name"),
+                            tool_inputs_protected=tool_inputs_protected,
+                            tool_outputs_protected=tool_outputs_protected,
+                        )
                 result, tool_pii = self._placeholderize_tool_output(
                     result,
                     placeholder_map,
-                    tool_name=resolved_tc.get("name"),
+                    tool_name=execute_tc.get("name"),
                 )
                 if tool_pii:
                     tool_entities_summary.append(tool_pii)
@@ -152,8 +207,8 @@ class SecureRuntime(AgentRuntime):
                 tool_results.append({"tool_call": tc, "result": result})
                 messages.append({
                     "role": "tool",
-                    "tool_call_id": resolved_tc.get("id"),
-                    "name": resolved_tc.get("name"),
+                    "tool_call_id": execute_tc.get("id"),
+                    "name": execute_tc.get("name"),
                     "content": str(result),
                 })
 
@@ -194,6 +249,7 @@ class SecureRuntime(AgentRuntime):
                 if isinstance(item, dict) and "placeholder" in item and "original" in item:
                     out[str(item["placeholder"])] = str(item["original"])
             return out
+        return {}
 
     @staticmethod
     def _ensure_system_message(messages: list[Dict[str, Any]], system_prompt: str) -> list[Dict[str, Any]]:
@@ -304,12 +360,40 @@ class SecureRuntime(AgentRuntime):
                 return msg.get("content", "") or ""
         return ""
 
-    def _resolve_tool_call(self, tool_call: Dict[str, Any], placeholder_map: Dict[str, str]) -> Dict[str, Any]:
+    def _prepare_tool_call_for_execution(
+        self,
+        tool_call: Dict[str, Any],
+        placeholder_map: Dict[str, str],
+        *,
+        tool_type: str | None = None,
+    ) -> Dict[str, Any]:
+        if normalize_tool_type(tool_type) == TOOL_TYPE_AGENTIC:
+            return dict(tool_call)
         resolved = dict(tool_call)
         args = tool_call.get("arguments")
         if isinstance(args, dict):
             resolved["arguments"] = self._resolve_obj(args, placeholder_map)
         return resolved
+
+    @staticmethod
+    def _attach_agentic_context(
+        tool_call: Dict[str, Any],
+        placeholder_map: Dict[str, str],
+    ) -> tuple[Dict[str, Any], Dict[str, Any]]:
+        resolved = dict(tool_call)
+        args = resolved.get("arguments")
+        if not isinstance(args, dict):
+            args = {}
+        args = dict(args)
+        existing = args.get("dymium_context")
+        agentic_ctx = dict(existing) if isinstance(existing, dict) else {}
+        if "placeholder_map" not in agentic_ctx:
+            agentic_ctx["placeholder_map"] = dict(placeholder_map)
+        if "security_summary" not in agentic_ctx:
+            agentic_ctx["security_summary"] = ensure_security_summary()
+        args["dymium_context"] = agentic_ctx
+        resolved["arguments"] = args
+        return resolved, agentic_ctx
 
     def _resolve_obj(self, obj: Any, placeholder_map: Dict[str, str]) -> Any:
         if isinstance(obj, dict):
@@ -354,6 +438,147 @@ class SecureRuntime(AgentRuntime):
         if isinstance(mcp_config, list):
             return GLOBAL_REGISTRY.create("tools", "mcp_multi", {"servers": list(mcp_config)})
         raise ValueError("RuntimeConfig.mcp must be a dict or list of dicts")
+
+    def _tool_types_by_name(self, tool_defs: Iterable[Dict[str, Any]]) -> Dict[str, str]:
+        out: Dict[str, str] = {}
+        for tool in tool_defs:
+            if not isinstance(tool, dict):
+                continue
+            name = tool.get("name")
+            if not name:
+                continue
+            out[str(name)] = normalize_tool_type(tool.get("tool_type"))
+        out.update(self._tool_types)
+        return out
+
+    @classmethod
+    def _extract_agentic_metadata_from_tool_result(
+        cls,
+        result: Any,
+    ) -> tuple[Any, Dict[str, str], Dict[str, Any] | None]:
+        updates: Dict[str, str] = {}
+        child_summary: Dict[str, Any] | None = None
+        if not isinstance(result, dict):
+            return result, updates, child_summary
+
+        updated = dict(result)
+        dymium_ctx = updated.pop("dymium_context", None)
+        if isinstance(dymium_ctx, dict):
+            updates.update(cls._normalize_placeholder_map(dymium_ctx.get("placeholder_map")))
+            raw_ctx_summary = dymium_ctx.get("security_summary")
+            if isinstance(raw_ctx_summary, dict):
+                child_summary = cls._merge_summary_dicts(child_summary, raw_ctx_summary)
+        updates.update(cls._normalize_placeholder_map(updated.pop("placeholder_map", None)))
+        updates.update(cls._normalize_placeholder_map(updated.pop("placeholderMap", None)))
+        raw_child_summary = updated.pop("security_summary", None) or updated.pop("securitySummary", None)
+        if isinstance(raw_child_summary, dict):
+            child_summary = raw_child_summary
+
+        payload = updated.get("result")
+        if isinstance(payload, dict):
+            payload_updated = dict(payload)
+            updates.update(cls._normalize_placeholder_map(payload_updated.pop("placeholder_map", None)))
+            updates.update(cls._normalize_placeholder_map(payload_updated.pop("placeholderMap", None)))
+            raw_child_summary = payload_updated.pop("security_summary", None) or payload_updated.pop("securitySummary", None)
+            if isinstance(raw_child_summary, dict):
+                child_summary = cls._merge_summary_dicts(child_summary, raw_child_summary)
+            updated["result"] = payload_updated
+
+        return updated, updates, child_summary
+
+    @classmethod
+    def _merge_summary_dicts(cls, left: Dict[str, Any] | None, right: Dict[str, Any] | None) -> Dict[str, Any]:
+        if not isinstance(left, dict):
+            return dict(right or {})
+        if not isinstance(right, dict):
+            return dict(left)
+
+        out: Dict[str, Any] = dict(left)
+        left_in = left.get("input_redaction") if isinstance(left.get("input_redaction"), dict) else {}
+        right_in = right.get("input_redaction") if isinstance(right.get("input_redaction"), dict) else {}
+        out["input_redaction"] = {
+            "entities_detected": {
+                "count": int((left_in.get("entities_detected") or {}).get("count", 0))
+                + int((right_in.get("entities_detected") or {}).get("count", 0)),
+                "types": cls._merge_type_counts(
+                    (left_in.get("entities_detected") or {}).get("types"),
+                    (right_in.get("entities_detected") or {}).get("types"),
+                ),
+            },
+            "sensitive_detected": bool(left_in.get("sensitive_detected") or right_in.get("sensitive_detected")),
+        }
+
+        left_tool = left.get("tool_usage") if isinstance(left.get("tool_usage"), dict) else {}
+        right_tool = right.get("tool_usage") if isinstance(right.get("tool_usage"), dict) else {}
+        out["tool_usage"] = {
+            "tool_calls": list(left_tool.get("tool_calls") or []) + list(right_tool.get("tool_calls") or []),
+            "sensitive_inputs_protected": bool(
+                left_tool.get("sensitive_inputs_protected") or right_tool.get("sensitive_inputs_protected")
+            ),
+            "sensitive_outputs_protected": bool(
+                left_tool.get("sensitive_outputs_protected") or right_tool.get("sensitive_outputs_protected")
+            ),
+            "entities_detected_in_tool_outputs": list(left_tool.get("entities_detected_in_tool_outputs") or [])
+            + list(right_tool.get("entities_detected_in_tool_outputs") or []),
+        }
+        return out
+
+    @staticmethod
+    def _merge_type_counts(left: Dict[str, Any] | None, right: Dict[str, Any] | None) -> Dict[str, int]:
+        out: Dict[str, int] = {}
+        for source in (left or {}, right or {}):
+            if not isinstance(source, dict):
+                continue
+            for key, value in source.items():
+                out[str(key)] = out.get(str(key), 0) + int(value)
+        return out
+
+    @classmethod
+    def _merge_child_security_summary(
+        cls,
+        child_summary: Dict[str, Any],
+        input_entities_summary: Dict[str, Any],
+        tool_entities_summary: list[Dict[str, Any]],
+        tool_calls_history: list[Dict[str, Any]],
+        parent_tool_name: str | None,
+        tool_inputs_protected: bool,
+        tool_outputs_protected: bool,
+    ) -> tuple[bool, bool]:
+        input_redaction = child_summary.get("input_redaction") if isinstance(child_summary, dict) else {}
+        input_entities = input_redaction.get("entities_detected") if isinstance(input_redaction, dict) else {}
+        if isinstance(input_entities, dict):
+            input_entities_summary["count"] = int(input_entities_summary.get("count", 0)) + int(input_entities.get("count", 0))
+            types = input_entities_summary.get("types", {})
+            if not isinstance(types, dict):
+                types = {}
+            for key, value in (input_entities.get("types") or {}).items():
+                types[str(key)] = types.get(str(key), 0) + int(value)
+            input_entities_summary["types"] = types
+
+        tool_usage = child_summary.get("tool_usage") if isinstance(child_summary, dict) else {}
+        if isinstance(tool_usage, dict):
+            for call in tool_usage.get("tool_calls") or []:
+                if not isinstance(call, dict):
+                    continue
+                name = call.get("name")
+                if not isinstance(name, str) or not name:
+                    continue
+                merged_call = dict(call)
+                if parent_tool_name and not merged_call.get("parent_tool"):
+                    merged_call["parent_tool"] = parent_tool_name
+                    merged_call["scope"] = f"{parent_tool_name}.subagent"
+                else:
+                    merged_call["scope"] = merged_call.get("scope") or "root"
+                tool_calls_history.append(merged_call)
+            if tool_usage.get("sensitive_inputs_protected"):
+                tool_inputs_protected = True
+            if tool_usage.get("sensitive_outputs_protected"):
+                tool_outputs_protected = True
+            for row in tool_usage.get("entities_detected_in_tool_outputs") or []:
+                if isinstance(row, dict):
+                    tool_entities_summary.append(row)
+
+        return tool_inputs_protected, tool_outputs_protected
 
     def _placeholderize_tool_output(
         self,
@@ -428,15 +653,25 @@ class SecureRuntime(AgentRuntime):
         tool_inputs_protected: bool,
         tool_outputs_protected: bool,
     ) -> Dict[str, Any]:
-        tool_names = [tc.get("name") for tc in tool_calls if isinstance(tc, dict)]
+        normalized_tool_calls: list[Dict[str, Any]] = []
+        for tc in tool_calls:
+            if not isinstance(tc, dict):
+                continue
+            name = tc.get("name")
+            if not isinstance(name, str) or not name:
+                continue
+            normalized_tool_calls.append({
+                "name": name,
+                "parent_tool": tc.get("parent_tool"),
+                "scope": tc.get("scope") or ("root" if not tc.get("parent_tool") else f"{tc.get('parent_tool')}.subagent"),
+            })
         return {
             "input_redaction": {
                 "entities_detected": input_entities,
                 "sensitive_detected": bool(input_entities.get("count")),
             },
             "tool_usage": {
-                "tools_called": tool_names,
-                "tool_calls_count": len(tool_names),
+                "tool_calls": normalized_tool_calls,
                 "sensitive_inputs_protected": tool_inputs_protected,
                 "sensitive_outputs_protected": tool_outputs_protected,
                 "entities_detected_in_tool_outputs": tool_entities,
@@ -453,6 +688,16 @@ class SecureRuntime(AgentRuntime):
             return any(SecureRuntime._contains_placeholders(v, placeholder_map) for v in obj)
         if isinstance(obj, str):
             return any(ph in obj for ph in placeholder_map.keys())
+        return False
+
+    @staticmethod
+    def _has_agentic_metadata(value: Any) -> bool:
+        if isinstance(value, dict):
+            if any(k in value for k in ("placeholder_map", "placeholderMap", "security_summary", "securitySummary")):
+                return True
+            return any(SecureRuntime._has_agentic_metadata(v) for v in value.values())
+        if isinstance(value, list):
+            return any(SecureRuntime._has_agentic_metadata(item) for item in value)
         return False
 
     @staticmethod

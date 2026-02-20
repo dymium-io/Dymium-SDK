@@ -21,6 +21,7 @@ config = RuntimeConfig(
     llm_config={"api_key": "..."},
     pii_config={"base_url": "http://localhost:5000"},
     mcp={"base_url": "http://localhost:7000"},
+    tool_types={"delegate_to_subagent": "agentic"},  # optional
 )
 
 runtime = SecureRuntime.from_config(config)
@@ -70,6 +71,18 @@ session = runtime.session()
 session.run("My email is me@example.com.")
 session.run("Can you summarize what I told you?")
 ```
+
+## Tool types (agentic vs non-agentic)
+
+Use `tool_types` to define execution boundaries:
+- `non_agentic` (default): placeholders are resolved only at tool execution.
+- `agentic`: placeholders are passed to the delegated agent/tool runtime through `dymium_context`.
+
+For in-process `LangChain`/`LangGraph` sub-agent handoffs where both parent and child use
+`DymiumMiddleware`, context propagation and merge are automatic.
+
+For remote or non-Dymium child runtimes, propagate `dymium_context["placeholder_map"]` and
+`dymium_context["security_summary"]` explicitly and write updated values back.
 
 ## Install (local dev)
 

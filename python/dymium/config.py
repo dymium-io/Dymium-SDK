@@ -19,6 +19,8 @@ class RuntimeConfig:
 
     redaction_config: Dict[str, Any] = field(default_factory=dict)
     runtime_config: Dict[str, Any] = field(default_factory=dict)
+    # Optional per-tool behavior override: {"tool_name": "non_agentic|agentic"}.
+    tool_types: Dict[str, str] = field(default_factory=dict)
     # Nicer public config for MCP (single server dict or list of servers).
     mcp: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = None
 
@@ -31,6 +33,8 @@ class RuntimeConfig:
             raise ValueError("RuntimeConfig.tools is required unless mcp is provided")
         if self.mcp is not None and not isinstance(self.mcp, (dict, list)):
             raise ValueError("RuntimeConfig.mcp must be a dict or list of dicts")
+        if not isinstance(self.tool_types, dict):
+            raise ValueError("RuntimeConfig.tool_types must be a dict")
 
     def resolve_llm(self) -> Tuple[str, Dict[str, Any]]:
         """Resolve provider + config, preferring model/model_config."""

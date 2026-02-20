@@ -29,6 +29,7 @@ class ExternalMCPAdapter:
                 "description": tool.get("description"),
                 "parameters": tool.get("inputSchema") or tool.get("parameters"),
                 "source": "mcp",
+                "tool_type": tool.get("tool_type") or tool.get("toolType"),
             })
         return out
 

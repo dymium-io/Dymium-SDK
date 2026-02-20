@@ -44,6 +44,7 @@ class CombinedToolAdapter:
                         "description": tool.get("description"),
                         "parameters": tool.get("parameters"),
                         "source": tool.get("source"),
+                        "tool_type": tool.get("tool_type"),
                     })
 
         if conflicts and self.prefix_on_conflict:
@@ -59,6 +60,7 @@ class CombinedToolAdapter:
                         "description": tool.get("description"),
                         "parameters": tool.get("parameters"),
                         "source": tool.get("source"),
+                        "tool_type": tool.get("tool_type"),
                     })
 
         if conflicts and not self.prefix_on_conflict:

@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -19,4 +19,10 @@ class ToolDefinition(BaseModel):
     source: Annotated[
         str | None,
         Field(description='Tool origin (e.g., mcp, builtin, internal, external).'),
+    ] = None
+    tool_type: Annotated[
+        Literal['non_agentic', 'agentic'] | None,
+        Field(
+            description='Tool execution mode. non_agentic resolves placeholders before call; agentic receives placeholders and manages nested tool resolution itself.'
+        ),
     ] = None

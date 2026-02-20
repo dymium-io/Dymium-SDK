@@ -17,6 +17,13 @@ except Exception:  # pragma: no cover
     def add_messages(a, b):  # type: ignore
         return (a or []) + (b or [])
 
+try:
+    from langchain_core.messages import RemoveMessage
+    from langgraph.graph.message import REMOVE_ALL_MESSAGES
+except Exception:  # pragma: no cover
+    RemoveMessage = None  # type: ignore
+    REMOVE_ALL_MESSAGES = None  # type: ignore
+
 
 def _merge_placeholder_maps(left: Dict[str, str] | None, right: Dict[str, str] | None) -> Dict[str, str]:
     out: Dict[str, str] = {}
@@ -33,6 +40,10 @@ def _merge_type_counts(left: Dict[str, int] | None, right: Dict[str, int] | None
 
 
 def _merge_tool_entity_rows(left: List[Dict[str, Any]] | None, right: List[Dict[str, Any]] | None) -> List[Dict[str, Any]]:
+    return list(left or []) + list(right or [])
+
+
+def _merge_tool_calls(left: List[Dict[str, Any]] | None, right: List[Dict[str, Any]] | None) -> List[Dict[str, Any]]:
     return list(left or []) + list(right or [])
 
 
@@ -57,9 +68,9 @@ def _merge_security_summaries(left: Dict[str, Any] | None, right: Dict[str, Any]
 
     l_tool = l.get("tool_usage", {})
     r_tool = r.get("tool_usage", {})
-    out["tool_usage"]["tools_called"] = list(l_tool.get("tools_called") or []) + list(r_tool.get("tools_called") or [])
-    out["tool_usage"]["tool_calls_count"] = int(l_tool.get("tool_calls_count", 0)) + int(
-        r_tool.get("tool_calls_count", 0)
+    out["tool_usage"]["tool_calls"] = _merge_tool_calls(
+        l_tool.get("tool_calls"),
+        r_tool.get("tool_calls"),
     )
     out["tool_usage"]["sensitive_inputs_protected"] = bool(
         l_tool.get("sensitive_inputs_protected") or r_tool.get("sensitive_inputs_protected")
@@ -93,7 +104,7 @@ def sanitize_state_messages(
     messages_key: str = "messages",
 ) -> Dict[str, Any]:
     messages = list(state.get(messages_key, []) or [])
-    base_map = dict(state.get("placeholder_map") or {})
+    base_map = _read_placeholder_map(state)
     ctx = SanitizationContext(
         placeholder_map=dict(base_map),
         security_summary=ensure_security_summary(),
@@ -120,8 +131,9 @@ def sanitize_state_messages(
     last_idx = len(sanitized)
 
     return {
-        messages_key: sanitized,
-        "placeholder_map": _map_delta(base_map, ctx.placeholder_map),
+        # With add_messages reducer, replace message history explicitly.
+        messages_key: _replace_messages(sanitized),
+        "placeholder_map": dict(ctx.placeholder_map),
         "security_summary": ctx.security_summary,
         "last_sanitized_index": last_idx,
     }
@@ -140,7 +152,7 @@ def deobfuscate_last_message(
     if isinstance(state, dict):
         state[messages_key] = deob_messages
     ctx = SanitizationContext(
-        placeholder_map=dict(state.get("placeholder_map") or {}),
+        placeholder_map=_read_placeholder_map(state),
         security_summary=ensure_security_summary(state.get("security_summary")),
     )
     last = deob_messages[-1]
@@ -163,12 +175,14 @@ def deobfuscate_state_messages(
 
 
 def _ensure_system_message(messages: List[Any], system_prompt: str) -> List[Any]:
-    if messages:
-        first = messages[0]
-        if _is_system_message(first):
-            return messages
+    # Keep exactly one canonical security system prompt at the start.
+    anchor = (system_prompt.splitlines() or [""])[0].strip()
+    filtered = [
+        msg for msg in messages
+        if not _system_message_matches(msg, system_prompt, anchor)
+    ]
     system_message = _make_system_message(system_prompt)
-    return [system_message, *messages]
+    return [system_message, *filtered]
 
 
 def _is_system_message(msg: Any) -> bool:
@@ -176,6 +190,29 @@ def _is_system_message(msg: Any) -> bool:
         return msg.get("role") == "system"
     role = getattr(msg, "type", None) or getattr(msg, "role", None)
     return role == "system"
+
+
+def _system_message_matches(msg: Any, system_prompt: str, anchor: str) -> bool:
+    if not _is_system_message(msg):
+        return False
+
+    content: Any = ""
+    if isinstance(msg, dict):
+        content = msg.get("content") or ""
+    elif hasattr(msg, "content"):
+        content = getattr(msg, "content")
+
+    if isinstance(content, str):
+        text = content.strip()
+        return text == system_prompt.strip() or (anchor and text.startswith(anchor))
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                parts.append(part["text"])
+        text = "\n".join(parts).strip()
+        return text == system_prompt.strip() or (anchor and text.startswith(anchor))
+    return False
 
 
 def _make_system_message(content: str) -> Any:
@@ -220,6 +257,23 @@ def _map_delta(base: Dict[str, str], updated: Dict[str, str]) -> Dict[str, str]:
         if base.get(k) != v:
             delta[k] = v
     return delta
+
+
+def _replace_messages(messages: List[Any]) -> List[Any]:
+    if RemoveMessage is not None and REMOVE_ALL_MESSAGES is not None:
+        return [RemoveMessage(id=REMOVE_ALL_MESSAGES), *messages]
+    return messages
+
+
+def _read_placeholder_map(state: Dict[str, Any]) -> Dict[str, str]:
+    if not isinstance(state, dict):
+        return {}
+    raw = state.get("placeholder_map")
+    if not isinstance(raw, dict):
+        raw = state.get("placeholderMap")
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): str(v) for k, v in raw.items()}
 
 
 def _deobfuscate_messages(

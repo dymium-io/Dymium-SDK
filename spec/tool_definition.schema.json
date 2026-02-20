@@ -12,6 +12,11 @@
     "source": {
       "type": "string",
       "description": "Tool origin (e.g., mcp, builtin, internal, external)."
+    },
+    "tool_type": {
+      "type": "string",
+      "enum": ["non_agentic", "agentic"],
+      "description": "Tool execution mode. non_agentic resolves placeholders before call; agentic receives placeholders and manages nested tool resolution itself."
     }
   }
 }
