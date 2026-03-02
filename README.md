@@ -63,7 +63,7 @@ final_text = sanitizer.deobfuscate("Email sent to PH_EMAIL_ABCDE", ctx)
 
 `tool_type` controls placeholder handling at tool boundaries:
 - `direct` (default): resolve placeholders before the tool call.
-- `delegated`: pass placeholders through unchanged and pass runtime context to the delegated agent/tool.
+- `delegated`: pass placeholders through unchanged and pass runtime context to the delegated agent/tool. This is intended for sub agents in the main agent runtime or for dymium secured agents running in separate instances altogether.
 
 For direct tools, optional `direct_input_mode` adds a per-tool knob:
 - `resolve` (default): materialize originals at execution time.
