@@ -87,16 +87,18 @@ For direct tools, use `tool_direct_input_modes` to control argument handling:
 - `resolve` (default): materialize originals at execution time.
 - `protect`: keep placeholders in direct tool args.
 
-For in-process `LangChain`/`LangGraph` sub-agent handoffs where both parent and child use
-`DymiumMiddleware`, context propagation and merge are automatic.
-
-For remote or non-Dymium child runtimes, propagate `dymium_context["placeholder_map"]` and
-`dymium_context["security_summary"]` explicitly and write updated values back.
+Prealpha single-path design for delegated handoffs:
+- Use transport-managed delegation only (`delegated_transport` / `DelegatedTransport`).
+- Do not manually propagate `placeholder_map` / `security_summary` in application tool code.
+- Delegated context must be runtime-managed by Dymium (tool-supplied/manual contexts are rejected).
 
 For `SecureRuntime`, delegated cross-instance calls can be automatic with `delegated_transport`
 on a local delegated tool (no custom handler needed). The runtime forwards
 `dymium_context`, includes `placeholderMap`, and merges returned `placeholder_map` and
 `security_summary`.
+
+Remote delegated targets must also run Dymium security (another `SecureRuntime` instance or
+an integration path using Dymium sanitizer/middleware) to stay in the same security plane.
 
 For integration-managed tools (LangChain/LangGraph/LlamaIndex), use `DelegatedTransport`
 inside delegated tool handlers and pass `dymium_context` to `invoke(...)`.

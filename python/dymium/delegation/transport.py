@@ -7,6 +7,11 @@ import urllib.error
 import urllib.request
 
 
+RUNTIME_CONTEXT_MARKER_KEY = "__dymium_runtime_context"
+RUNTIME_CONTEXT_MARKER_VALUE = "v1"
+RUNTIME_CONTEXT_ID_KEY = "__dymium_runtime_context_id"
+
+
 class DelegatedTransport:
     """Protocol-agnostic delegated transport config with HTTP implementation."""
 
@@ -33,6 +38,17 @@ class DelegatedTransport:
             raw_ctx = call_args.pop("dymium_context", None)
             if isinstance(raw_ctx, dict):
                 dymium_context = raw_ctx
+        if isinstance(dymium_context, dict):
+            marker = dymium_context.get(RUNTIME_CONTEXT_MARKER_KEY)
+            if marker != RUNTIME_CONTEXT_MARKER_VALUE:
+                raise ValueError(
+                    "Delegated transport requires runtime-managed dymium_context. "
+                    "Use SecureRuntime delegated_transport or integration wrappers."
+                )
+            if not isinstance(dymium_context.get(RUNTIME_CONTEXT_ID_KEY), str):
+                raise ValueError(
+                    "Delegated transport requires runtime-managed dymium_context id."
+                )
 
         payload = self._build_request_payload(call_args, dymium_context)
         method = self._cfg["method"]
@@ -74,6 +90,8 @@ class DelegatedTransport:
             raise RuntimeError(
                 f"Delegated transport {self._name!r} returned non-object response"
             )
+        if self._cfg["security_context"] != "off" and isinstance(dymium_context, dict):
+            self._merge_response_security_context(response_payload, dymium_context)
         return response_payload
 
     def _build_request_payload(
@@ -116,6 +134,58 @@ class DelegatedTransport:
             payload["dymium_context"] = dymium_context
 
         return payload
+
+    @staticmethod
+    def _merge_response_security_context(
+        response_payload: Dict[str, Any],
+        dymium_context: Dict[str, Any],
+    ) -> None:
+        updates, summary = DelegatedTransport._extract_response_security_context(
+            response_payload,
+            expected_context_id=dymium_context.get(RUNTIME_CONTEXT_ID_KEY),
+        )
+        if updates:
+            current = dymium_context.get("placeholder_map")
+            current_map = dict(current) if isinstance(current, dict) else {}
+            current_map.update(updates)
+            dymium_context["placeholder_map"] = current_map
+        if isinstance(summary, dict):
+            dymium_context["security_summary"] = summary
+
+    @staticmethod
+    def _extract_response_security_context(
+        payload: Dict[str, Any],
+        *,
+        expected_context_id: Any,
+    ) -> tuple[Dict[str, str], Dict[str, Any] | None]:
+        if not isinstance(expected_context_id, str) or not expected_context_id:
+            raise RuntimeError("Delegated transport is missing runtime context id.")
+
+        dymium_ctx = payload.get("dymium_context")
+        if not isinstance(dymium_ctx, dict):
+            raise RuntimeError(
+                "Delegated transport response must include dymium_context."
+            )
+        if dymium_ctx.get(RUNTIME_CONTEXT_MARKER_KEY) != RUNTIME_CONTEXT_MARKER_VALUE:
+            raise RuntimeError("Delegated transport response dymium_context marker mismatch.")
+        if dymium_ctx.get(RUNTIME_CONTEXT_ID_KEY) != expected_context_id:
+            raise RuntimeError("Delegated transport response dymium_context id mismatch.")
+
+        updates = DelegatedTransport._normalize_placeholder_map(dymium_ctx.get("placeholder_map"))
+        summary = dymium_ctx.get("security_summary")
+        return updates, (dict(summary) if isinstance(summary, dict) else None)
+
+    @staticmethod
+    def _normalize_placeholder_map(raw: Any) -> Dict[str, str]:
+        if isinstance(raw, dict):
+            return {str(k): str(v) for k, v in raw.items()}
+        if isinstance(raw, list):
+            out: Dict[str, str] = {}
+            for item in raw:
+                if isinstance(item, dict) and "placeholder" in item and "original" in item:
+                    out[str(item["placeholder"])] = str(item["original"])
+            return out
+        return {}
 
     @staticmethod
     def _normalize_config(name: str, config: Any) -> Dict[str, Any]:

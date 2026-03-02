@@ -77,32 +77,18 @@ For `delegated` tools, Dymium passes `dymium_context` with:
 
 When the delegated runtime updates those fields, Dymium merges them back into the parent flow.
 
-For in-process `LangChain`/`LangGraph` sub-agent handoffs where both parent and child use `DymiumMiddleware`,
-this propagation/merge is automatic.
-
-For remote or non-Dymium child runtimes, use explicit forwarding:
-
-```python
-def delegate_to_subagent(query: str, dymium_context: dict | None = None) -> dict:
-    placeholder_map = (dymium_context or {}).get("placeholder_map", {})
-    security_summary = (dymium_context or {}).get("security_summary", {})
-
-    sub_result = sub_agent.invoke({
-        "messages": [{"role": "user", "content": query}],
-        "placeholder_map": placeholder_map,
-        "security_summary": security_summary,
-    })
-
-    if isinstance(dymium_context, dict):
-        dymium_context["placeholder_map"] = sub_result.get("placeholder_map", {})
-        dymium_context["security_summary"] = sub_result.get("security_summary", {})
-
-    return {"result": sub_result.get("text", "")}
-```
+Prealpha single-path design for delegated handoffs:
+- Use transport-managed delegation only (`delegated_transport` / `DelegatedTransport`).
+- Do not manually plumb `placeholder_map` / `security_summary` in app tool code.
+- Delegated context must be runtime-managed by Dymium (tool-supplied/manual contexts are rejected).
 
 For `SecureRuntime`, remote delegated handoffs can be automatic by defining a local delegated
 tool with `delegated_transport` (no custom handler required). Dymium forwards `dymium_context`,
 passes `placeholderMap`, and merges returned `placeholder_map` / `security_summary`.
+
+To include remote agents in the same security plane, the remote target must also run Dymium
+security (for example another `SecureRuntime` instance, or a framework agent wrapped with Dymium
+middleware/sanitization). Transport alone is not sufficient if the remote runtime is not secured.
 
 ```python
 config = RuntimeConfig(

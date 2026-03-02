@@ -2,9 +2,15 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import uuid
 from typing import Any, Callable, Dict, Sequence
 
 from dymium.sanitization import Sanitizer, SanitizationContext, ensure_security_summary
+from dymium.delegation.transport import (
+    RUNTIME_CONTEXT_ID_KEY,
+    RUNTIME_CONTEXT_MARKER_KEY,
+    RUNTIME_CONTEXT_MARKER_VALUE,
+)
 from dymium.tools import TOOL_TYPE_DELEGATED, normalize_direct_input_mode, normalize_tool_type
 
 
@@ -54,12 +60,14 @@ def make_tool_call_wrapper(
             and isinstance(resolved_args, dict)
         ):
             resolved_args = dict(resolved_args)
-            existing_ctx = resolved_args.get("dymium_context")
-            agentic_ctx = dict(existing_ctx) if isinstance(existing_ctx, dict) else {}
-            if "placeholder_map" not in agentic_ctx:
-                agentic_ctx["placeholder_map"] = dict(ctx.placeholder_map)
-            if "security_summary" not in agentic_ctx:
-                agentic_ctx["security_summary"] = ensure_security_summary()
+            # Runtime-owned context only: ignore tool-supplied dymium_context.
+            resolved_args.pop("dymium_context", None)
+            agentic_ctx = {
+                "placeholder_map": dict(ctx.placeholder_map),
+                "security_summary": ensure_security_summary(),
+                RUNTIME_CONTEXT_MARKER_KEY: RUNTIME_CONTEXT_MARKER_VALUE,
+                RUNTIME_CONTEXT_ID_KEY: uuid.uuid4().hex,
+            }
             resolved_args["dymium_context"] = agentic_ctx
         tool_call = dict(tool_call)
         tool_call["args"] = resolved_args
@@ -70,11 +78,7 @@ def make_tool_call_wrapper(
             request = request.override(tool_call=tool_call)
 
         result = handler(request)
-        if (
-            tool_type == TOOL_TYPE_DELEGATED
-            and isinstance(agentic_ctx, dict)
-            and not _has_agentic_metadata(result)
-        ):
+        if tool_type == TOOL_TYPE_DELEGATED and isinstance(agentic_ctx, dict):
             child_map = _normalize_placeholder_map(agentic_ctx.get("placeholder_map"))
             if child_map:
                 ctx.placeholder_map.update(child_map)

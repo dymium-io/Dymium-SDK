@@ -107,11 +107,9 @@ class Sanitizer:
         tool_type: str | None = None,
     ) -> Any:
         if normalize_tool_type(tool_type) == TOOL_TYPE_DELEGATED:
-            tool_output, placeholder_updates, child_security_summary = _extract_agentic_metadata_from_output(tool_output)
-            if placeholder_updates:
-                ctx.placeholder_map.update(placeholder_updates)
-            if child_security_summary:
-                _merge_security_summary(ctx.security_summary, child_security_summary, parent_tool=tool_name)
+            # Runtime-owned context only: strip returned metadata fields but do not
+            # accept placeholder/security context from raw tool output payloads.
+            tool_output, _, _ = _extract_agentic_metadata_from_output(tool_output)
         sanitized, summary = _sanitize_tool_output(
             tool_output,
             ctx.placeholder_map,

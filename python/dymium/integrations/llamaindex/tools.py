@@ -3,9 +3,15 @@ from __future__ import annotations
 
 from functools import wraps
 import inspect
+import uuid
 from typing import Any, Callable, Dict, Iterable, List
 
 from dymium.sanitization import Sanitizer, SanitizationContext, ensure_security_summary
+from dymium.delegation.transport import (
+    RUNTIME_CONTEXT_ID_KEY,
+    RUNTIME_CONTEXT_MARKER_KEY,
+    RUNTIME_CONTEXT_MARKER_VALUE,
+)
 from dymium.tools import TOOL_TYPE_DELEGATED, normalize_direct_input_mode, normalize_tool_type
 
 
@@ -35,11 +41,7 @@ def wrap_tool_callable(
             direct_input_mode=normalized_direct_input_mode,
         )
         result = func(*resolved_args, **resolved_kwargs)
-        if (
-            normalized_tool_type == TOOL_TYPE_DELEGATED
-            and isinstance(agentic_ctx, dict)
-            and not _has_agentic_metadata(result)
-        ):
+        if normalized_tool_type == TOOL_TYPE_DELEGATED and isinstance(agentic_ctx, dict):
             _merge_agentic_context(ctx, agentic_ctx, parent_tool=name)
         return sanitizer.sanitize_tool_output(
             result,
@@ -144,11 +146,7 @@ class _ToolProxy:
             direct_input_mode=self._direct_input_mode,
         )
         result = self._tool(*resolved_args, **resolved_kwargs)
-        if (
-            self._tool_type == TOOL_TYPE_DELEGATED
-            and isinstance(agentic_ctx, dict)
-            and not _has_agentic_metadata(result)
-        ):
+        if self._tool_type == TOOL_TYPE_DELEGATED and isinstance(agentic_ctx, dict):
             _merge_agentic_context(self._ctx, agentic_ctx, parent_tool=self._name)
         return self._sanitizer.sanitize_tool_output(
             result,
@@ -172,11 +170,7 @@ class _ToolProxy:
             result = await self._tool.acall(*resolved_args, **resolved_kwargs)
         else:
             result = self._tool(*resolved_args, **resolved_kwargs)
-        if (
-            self._tool_type == TOOL_TYPE_DELEGATED
-            and isinstance(agentic_ctx, dict)
-            and not _has_agentic_metadata(result)
-        ):
+        if self._tool_type == TOOL_TYPE_DELEGATED and isinstance(agentic_ctx, dict):
             _merge_agentic_context(self._ctx, agentic_ctx, parent_tool=self._name)
         return self._sanitizer.sanitize_tool_output(
             result,
@@ -209,7 +203,7 @@ def _resolve_invocation(
             direct_input_mode=normalized_direct_input_mode,
         )
         if normalized_tool_type == TOOL_TYPE_DELEGATED and isinstance(resolved, dict):
-            agentic_ctx = _build_agentic_context(resolved.get("dymium_context"), ctx)
+            agentic_ctx = _build_agentic_context(ctx)
             if _accepts_named_arg(func, "dymium_context"):
                 resolved = dict(resolved)
                 resolved["dymium_context"] = agentic_ctx
@@ -233,7 +227,7 @@ def _resolve_invocation(
             direct_input_mode=normalized_direct_input_mode,
         )
         if normalized_tool_type == TOOL_TYPE_DELEGATED and _accepts_named_arg(func, "dymium_context"):
-            agentic_ctx = _build_agentic_context(resolved_kwargs.get("dymium_context"), ctx)
+            agentic_ctx = _build_agentic_context(ctx)
             resolved_kwargs = dict(resolved_kwargs)
             resolved_kwargs["dymium_context"] = agentic_ctx
         return resolved_args, resolved_kwargs, agentic_ctx
@@ -259,13 +253,13 @@ def _accepts_named_arg(func: Callable[..., Any], name: str) -> bool:
     return False
 
 
-def _build_agentic_context(existing: Any, ctx: SanitizationContext) -> Dict[str, Any]:
-    out = dict(existing) if isinstance(existing, dict) else {}
-    if "placeholder_map" not in out:
-        out["placeholder_map"] = dict(ctx.placeholder_map)
-    if "security_summary" not in out:
-        out["security_summary"] = ensure_security_summary()
-    return out
+def _build_agentic_context(ctx: SanitizationContext) -> Dict[str, Any]:
+    return {
+        "placeholder_map": dict(ctx.placeholder_map),
+        "security_summary": ensure_security_summary(),
+        RUNTIME_CONTEXT_MARKER_KEY: RUNTIME_CONTEXT_MARKER_VALUE,
+        RUNTIME_CONTEXT_ID_KEY: uuid.uuid4().hex,
+    }
 
 
 def _normalize_placeholder_map(raw: Any) -> Dict[str, str]:

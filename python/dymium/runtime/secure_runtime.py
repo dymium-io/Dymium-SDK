@@ -1,6 +1,7 @@
 """SecureRuntime: SDK-owned orchestration loop (placeholder-safe)."""
 from __future__ import annotations
 
+import uuid
 from typing import Any, Dict, Iterable
 
 from dymium.core.contracts import AgentRuntime, RuntimeComponents
@@ -8,6 +9,11 @@ from dymium.config import RuntimeConfig
 from dymium.registry import GLOBAL_REGISTRY, register_default_adapters
 from dymium.redaction import RedactionEngine
 from dymium.sanitization import ensure_security_summary
+from dymium.delegation.transport import (
+    RUNTIME_CONTEXT_ID_KEY,
+    RUNTIME_CONTEXT_MARKER_KEY,
+    RUNTIME_CONTEXT_MARKER_VALUE,
+)
 from dymium.types import ChatRequest
 from dymium.adapters.tools import CombinedToolAdapter, LocalToolAdapter
 from dymium.tools import (
@@ -196,7 +202,7 @@ class SecureRuntime(AgentRuntime):
                     "dymium_context": agentic_ctx or {},
                 })
                 if tool_type == TOOL_TYPE_DELEGATED:
-                    if isinstance(agentic_ctx, dict) and not self._has_agentic_metadata(result):
+                    if isinstance(agentic_ctx, dict):
                         child_map = self._normalize_placeholder_map(agentic_ctx.get("placeholder_map"))
                         if child_map:
                             placeholder_map.update(child_map)
@@ -211,7 +217,10 @@ class SecureRuntime(AgentRuntime):
                                 tool_inputs_protected=tool_inputs_protected,
                                 tool_outputs_protected=tool_outputs_protected,
                             )
-                    result, map_updates, child_security_summary = self._extract_agentic_metadata_from_tool_result(result)
+                    result, map_updates, child_security_summary = self._extract_runtime_managed_context_from_tool_result(
+                        result,
+                        expected_context=agentic_ctx,
+                    )
                     if map_updates:
                         placeholder_map.update(map_updates)
                     if child_security_summary:
@@ -417,12 +426,14 @@ class SecureRuntime(AgentRuntime):
         if not isinstance(args, dict):
             args = {}
         args = dict(args)
-        existing = args.get("dymium_context")
-        agentic_ctx = dict(existing) if isinstance(existing, dict) else {}
-        if "placeholder_map" not in agentic_ctx:
-            agentic_ctx["placeholder_map"] = dict(placeholder_map)
-        if "security_summary" not in agentic_ctx:
-            agentic_ctx["security_summary"] = ensure_security_summary()
+        # Runtime-owned context only: ignore any caller/tool-supplied dymium_context.
+        args.pop("dymium_context", None)
+        agentic_ctx = {
+            "placeholder_map": dict(placeholder_map),
+            "security_summary": ensure_security_summary(),
+            RUNTIME_CONTEXT_MARKER_KEY: RUNTIME_CONTEXT_MARKER_VALUE,
+            RUNTIME_CONTEXT_ID_KEY: uuid.uuid4().hex,
+        }
         args["dymium_context"] = agentic_ctx
         resolved["arguments"] = args
         return resolved, agentic_ctx
@@ -531,6 +542,40 @@ class SecureRuntime(AgentRuntime):
             updated["result"] = payload_updated
 
         return updated, updates, child_summary
+
+    @classmethod
+    def _extract_runtime_managed_context_from_tool_result(
+        cls,
+        result: Any,
+        *,
+        expected_context: Dict[str, Any] | None = None,
+    ) -> tuple[Any, Dict[str, str], Dict[str, Any] | None]:
+        cleaned, _, _ = cls._extract_agentic_metadata_from_tool_result(result)
+        updates: Dict[str, str] = {}
+        child_summary: Dict[str, Any] | None = None
+        expected_context_id = expected_context.get(RUNTIME_CONTEXT_ID_KEY) if isinstance(expected_context, dict) else None
+        if not isinstance(expected_context_id, str):
+            return cleaned, updates, child_summary
+
+        candidates: list[Any] = []
+        if isinstance(result, dict):
+            candidates.append(result.get("dymium_context"))
+            payload = result.get("result")
+            if isinstance(payload, dict):
+                candidates.append(payload.get("dymium_context"))
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            if candidate.get(RUNTIME_CONTEXT_MARKER_KEY) != RUNTIME_CONTEXT_MARKER_VALUE:
+                continue
+            if candidate.get(RUNTIME_CONTEXT_ID_KEY) != expected_context_id:
+                continue
+            updates.update(cls._normalize_placeholder_map(candidate.get("placeholder_map")))
+            summary = candidate.get("security_summary")
+            if isinstance(summary, dict):
+                child_summary = dict(summary)
+            break
+        return cleaned, updates, child_summary
 
     @classmethod
     def _merge_summary_dicts(cls, left: Dict[str, Any] | None, right: Dict[str, Any] | None) -> Dict[str, Any]:
