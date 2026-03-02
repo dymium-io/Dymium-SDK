@@ -1,8 +1,14 @@
-"""GhostPII detector (Dymium-hosted PII service).
+"""GhostPII detector (Dymium Detect cloud service).
 
 Expected endpoint:
-- POST {base_url}/analyze
-  Payload: { "text": "...", "language": "en", "user_patterns": [...] }
+- POST {base_url}/v1/detect/pii
+  Payload: {
+    "text": "...",
+    "entity_types": ["ADDRESS", "AUTH", ...]  # optional; when omitted, server defaults apply
+  }
+
+Auth:
+- Authorization: Bearer <api_key> (required)
 
 Response formats handled:
 - { "entities": [ ... ] }
@@ -21,15 +27,23 @@ class GhostPIIDetector:
     def __init__(
         self,
         base_url: str,
-        api_key: str | None = None,
+        api_key: str,
         timeout_s: int = 10,
-        language: str = "en",
-        user_patterns: Optional[list[Dict[str, Any]]] = None,
+        entity_types: Optional[list[str]] = None,
+        endpoint_path: str = "/v1/detect/pii",
+        language: str = "en",  # legacy, kept for compatibility
+        user_patterns: Optional[list[Dict[str, Any]]] = None,  # legacy, kept for compatibility
         regex_rules: Optional[list[Dict[str, Any]]] = None,
     ) -> None:
+        if not base_url:
+            raise ValueError("GhostPIIDetector requires base_url")
+        if not api_key:
+            raise ValueError("GhostPIIDetector requires api_key")
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout_s = timeout_s
+        self.entity_types = self._normalize_entity_types(entity_types)
+        self.endpoint_path = endpoint_path
         self.language = language
         self.user_patterns = user_patterns
         self.regex_rules = regex_rules or []
@@ -39,16 +53,14 @@ class GhostPIIDetector:
             return []
         payload = {
             "text": text,
-            "language": self.language,
         }
-        if self.user_patterns:
-            payload["user_patterns"] = self.user_patterns
+        if self.entity_types:
+            payload["entity_types"] = list(self.entity_types)
 
         headers: Dict[str, str] = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
+        headers["Authorization"] = f"Bearer {self.api_key}"
 
-        url = f"{self.base_url}/analyze"
+        url = self._endpoint_url()
         resp = requests.post(url, json=payload, headers=headers, timeout=self.timeout_s)
         resp.raise_for_status()
         data = resp.json()
@@ -62,6 +74,31 @@ class GhostPIIDetector:
 
     def normalize(self, entities: Iterable[Dict[str, Any]]) -> Iterable[Dict[str, Any]]:
         return normalize_detected_entities(entities, source="ghostpii")
+
+    def _endpoint_url(self) -> str:
+        if self.base_url.endswith("/v1/detect/pii"):
+            return self.base_url
+        if self.base_url.endswith("/v1/detect/pii/"):
+            return self.base_url[:-1]
+        path = self.endpoint_path or "/v1/detect/pii"
+        if not path.startswith("/"):
+            path = "/" + path
+        return f"{self.base_url}{path}"
+
+    @staticmethod
+    def _normalize_entity_types(value: Any) -> list[str] | None:
+        if value is None:
+            return None
+        if not isinstance(value, list):
+            raise ValueError("GhostPIIDetector.entity_types must be a list of strings")
+        out: list[str] = []
+        for item in value:
+            if not isinstance(item, str):
+                continue
+            token = item.strip().upper()
+            if token and token not in out:
+                out.append(token)
+        return out or None
 
     @staticmethod
     def _normalize_entity(entity: Dict[str, Any], text: str) -> Dict[str, Any]:
