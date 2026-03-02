@@ -10,6 +10,8 @@ from dymium import RuntimeConfig, SecureRuntime
 
 MAIN_CALLS: list[tuple[str, dict[str, Any]]] = []
 SUB_CALLS: list[tuple[str, dict[str, Any]]] = []
+REMOTE_CHILD_REQUESTS: list[dict[str, Any]] = []
+REMOTE_AGENT_CALLS: list[tuple[str, dict[str, Any]]] = []
 PLACEHOLDER_RE = re.compile(r"PH_[A-Z]+_[A-Z0-9]{5}")
 PROTECTED_DIRECT_ARGS = {("lookup_customer", "email")}
 
@@ -300,6 +302,151 @@ class MCPServer:
             self._thread.join(timeout=5)
 
 
+class RemoteRuntimeHandler(BaseHTTPRequestHandler):
+    def log_message(self, format: str, *args: Any) -> None:  # noqa: A003 - match BaseHTTPRequestHandler
+        return
+
+    def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler naming
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length).decode("utf-8")
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            payload = {}
+        if isinstance(payload, dict):
+            REMOTE_CHILD_REQUESTS.append(payload)
+
+        runtime: SecureRuntime | None = getattr(self.server, "dymium_runtime", None)
+        if runtime is None:
+            self.send_response(500)
+            self.end_headers()
+            return
+
+        delegated_args = payload.get("delegated_arguments") if isinstance(payload, dict) else {}
+        if not isinstance(delegated_args, dict):
+            delegated_args = {}
+        handoff_request = delegated_args.get("handoff_request")
+        if not isinstance(handoff_request, str) or not handoff_request.strip():
+            handoff_request = "Handle this escalation and return ticket_id and case_id."
+        customer_email = str(delegated_args.get("customer_email", ""))
+        customer_phone = str(delegated_args.get("customer_phone", ""))
+
+        remote_prompt = (
+            "You are the remote escalation specialist.\n"
+            "Use tools in order:\n"
+            "1) remote_lookup_case(customer_email, customer_phone)\n"
+            "2) remote_notify_ops(case_id from step 1, customer_email, customer_phone)\n"
+            "Return a concise summary including case_id and ticket_id.\n\n"
+            f"handoff_request={handoff_request}\n"
+            f"customer_email={customer_email}\n"
+            f"customer_phone={customer_phone}"
+        )
+        recursion_limit = payload.get("recursion_limit") if isinstance(payload, dict) else None
+        request_payload: dict[str, Any] = {
+            "messages": [{"role": "user", "content": remote_prompt}],
+            "placeholderMap": payload.get("placeholderMap") if isinstance(payload, dict) else None,
+            "recursion_limit": int(recursion_limit) if isinstance(recursion_limit, int) else 4,
+        }
+        result = runtime.invoke(request_payload)
+
+        encoded = json.dumps(result).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
+
+
+class RemoteRuntimeServer:
+    def __init__(self, *, api_key: str, model: str, presidio_url: str) -> None:
+        self._server: ThreadingHTTPServer | None = None
+        self._thread: threading.Thread | None = None
+        self.invoke_url: str | None = None
+        self._api_key = api_key
+        self._model = model
+        self._presidio_url = presidio_url
+
+    def start(self) -> None:
+        remote_model = self._model.split(":", 1)[1] if ":" in self._model else self._model
+        remote_runtime_model = self._model if ":" in self._model else f"openai:{self._model}"
+
+        def remote_lookup_case(customer_email: str, customer_phone: str) -> dict[str, Any]:
+            REMOTE_AGENT_CALLS.append(("remote_lookup_case", {
+                "customer_email": customer_email,
+                "customer_phone": customer_phone,
+            }))
+            return {
+                "case_id": "CASE-7788",
+                "queue": "west-coast-escalations",
+                "customer_email": customer_email,
+                "customer_phone": customer_phone,
+            }
+
+        def remote_notify_ops(case_id: str, customer_email: str, customer_phone: str) -> dict[str, Any]:
+            REMOTE_AGENT_CALLS.append(("remote_notify_ops", {
+                "case_id": case_id,
+                "customer_email": customer_email,
+                "customer_phone": customer_phone,
+            }))
+            return {
+                "ticket_id": "RM-7788",
+                "case_id": case_id,
+                "ops_contact_email": "escalations@carrier-ops.example",
+                "customer_email": customer_email,
+                "customer_phone": customer_phone,
+            }
+
+        remote_config = RuntimeConfig(
+            model=remote_runtime_model,
+            pii="presidio",
+            llm_config={"api_key": self._api_key, "model": remote_model},
+            pii_config={"base_url": self._presidio_url},
+            tools=[
+                {
+                    "name": "remote_lookup_case",
+                    "description": "Create or lookup escalation case for customer contact.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "customer_email": {"type": "string"},
+                            "customer_phone": {"type": "string"},
+                        },
+                        "required": ["customer_email", "customer_phone"],
+                    },
+                    "handler": remote_lookup_case,
+                },
+                {
+                    "name": "remote_notify_ops",
+                    "description": "Notify remote ops queue and open callback ticket.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "case_id": {"type": "string"},
+                            "customer_email": {"type": "string"},
+                            "customer_phone": {"type": "string"},
+                        },
+                        "required": ["case_id", "customer_email", "customer_phone"],
+                    },
+                    "handler": remote_notify_ops,
+                },
+            ],
+        )
+        remote_runtime = SecureRuntime.from_config(remote_config)
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), RemoteRuntimeHandler)
+        setattr(self._server, "dymium_runtime", remote_runtime)
+        host, port = self._server.server_address
+        self.invoke_url = f"http://{host}:{port}/invoke"
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        if not self._server:
+            return
+        self._server.shutdown()
+        if self._thread:
+            self._thread.join(timeout=5)
+
+
 def _require_env(name: str) -> str:
     value = os.getenv(name)
     if not value:
@@ -327,20 +474,48 @@ def _extract_last_assistant(messages: list[Any]) -> str:
 
 
 def main() -> None:
-    _require_env("OPENAI_API_KEY")
+    api_key = _require_env("OPENAI_API_KEY")
     presidio_url = os.getenv("PRESIDIO_URL", "http://localhost:5000")
     _require_reachable(presidio_url)
     model = os.getenv("OPENAI_MODEL", "gpt-5")
 
     server = MCPServer()
+    remote_server = RemoteRuntimeServer(api_key=api_key, model=model, presidio_url=presidio_url)
     server.start()
+    remote_server.start()
     try:
+        if not remote_server.invoke_url:
+            print("Missing remote runtime invoke URL.", file=sys.stderr)
+            sys.exit(1)
         config = RuntimeConfig(
             model="openai:gpt-5",
             pii="presidio",
             llm_config={"api_key": os.getenv("OPENAI_API_KEY"), "model": model},
             pii_config={"base_url": presidio_url},
             mcp={"base_url": server.base_url},
+            tools=[
+                {
+                    "name": "run_remote_specialist",
+                    "description": "Delegate escalation to remote specialist runtime.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "handoff_request": {"type": "string"},
+                            "customer_email": {"type": "string"},
+                            "customer_phone": {"type": "string"},
+                        },
+                        "required": ["handoff_request", "customer_email", "customer_phone"],
+                    },
+                    "tool_type": "delegated",
+                    "delegated_transport": {
+                        "url": remote_server.invoke_url,
+                        "kind": "http",
+                        "prompt_arg": "handoff_request",
+                        "timeout_s": 90,
+                        "recursion_limit": 4,
+                    },
+                }
+            ],
             tool_types={"run_carrier_specialist": "delegated"},
             tool_direct_input_modes={"lookup_customer": "protect"},
         )
@@ -467,10 +642,84 @@ def main() -> None:
             print("FAIL: placeholders leaked into final response text.", file=sys.stderr)
             failures += 1
 
+        REMOTE_CHILD_REQUESTS.clear()
+        REMOTE_AGENT_CALLS.clear()
+        remote_request = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "My email is alice@example.com and phone is 415-555-0135.\n"
+                        "Use run_remote_specialist to open a remote escalation.\n"
+                        "Set handoff_request to summarize the escalation for operations."
+                    ),
+                }
+            ],
+            "tool_choice": {"type": "function", "function": {"name": "run_remote_specialist"}},
+            "recursion_limit": 4,
+        }
+        remote_result = runtime.invoke(remote_request)
+        remote_summary_calls = (
+            ((remote_result.get("security_summary") or {}).get("tool_usage") or {}).get("tool_calls") or []
+        )
+        remote_summary_names = {
+            call.get("name")
+            for call in remote_summary_calls
+            if isinstance(call, dict)
+        }
+        if "run_remote_specialist" not in remote_summary_names:
+            print("FAIL: run_remote_specialist was not invoked in remote delegation scenario.", file=sys.stderr)
+            failures += 1
+
+        if not REMOTE_CHILD_REQUESTS:
+            print("FAIL: Remote specialist runtime was not called.", file=sys.stderr)
+            failures += 1
+        else:
+            child_payload = REMOTE_CHILD_REQUESTS[-1]
+            child_map = child_payload.get("placeholderMap")
+            if not isinstance(child_map, dict) or "alice@example.com" not in {str(v) for v in child_map.values()}:
+                print("FAIL: Remote runtime did not receive propagated placeholderMap.", file=sys.stderr)
+                failures += 1
+            child_ctx = child_payload.get("dymium_context")
+            child_ctx_map = child_ctx.get("placeholder_map") if isinstance(child_ctx, dict) else None
+            if not isinstance(child_ctx_map, dict) or "alice@example.com" not in {str(v) for v in child_ctx_map.values()}:
+                print("FAIL: Remote runtime did not receive propagated dymium_context.placeholder_map.", file=sys.stderr)
+                failures += 1
+
+        if not REMOTE_AGENT_CALLS:
+            print("FAIL: Remote delegated runtime did not execute any remote tools.", file=sys.stderr)
+            failures += 1
+
+        merged_map = remote_result.get("placeholder_map", {})
+        if not isinstance(merged_map, dict):
+            print("FAIL: Parent runtime returned invalid placeholder_map after remote delegation.", file=sys.stderr)
+            failures += 1
+
+        expected_remote_sub = {"remote_lookup_case", "remote_notify_ops"}
+        missing_remote_sub = expected_remote_sub - remote_summary_names
+        if missing_remote_sub:
+            print(
+                f"FAIL: Remote sub-agent tools missing from merged security summary: {sorted(missing_remote_sub)}",
+                file=sys.stderr,
+            )
+            failures += 1
+        else:
+            for call in remote_summary_calls:
+                if not isinstance(call, dict):
+                    continue
+                if call.get("name") in expected_remote_sub and call.get("parent_tool") != "run_remote_specialist":
+                    print(
+                        "FAIL: Remote child tool hierarchy missing parent_tool=run_remote_specialist.",
+                        file=sys.stderr,
+                    )
+                    failures += 1
+                    break
+
         if failures:
             sys.exit(1)
     finally:
         server.stop()
+        remote_server.stop()
 
 
 if __name__ == "__main__":

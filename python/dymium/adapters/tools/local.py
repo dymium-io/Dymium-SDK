@@ -4,6 +4,7 @@ from __future__ import annotations
 import inspect
 from typing import Any, Callable, Dict, Iterable, List
 
+from dymium.delegation import DelegatedTransport
 from dymium.tools import (
     TOOL_TYPE_DELEGATED,
     normalize_direct_input_mode,
@@ -30,7 +31,7 @@ class LocalToolAdapter:
                 "name": spec["name"],
                 "description": spec.get("description"),
                 "parameters": spec.get("parameters") or {"type": "object", "properties": {}},
-                "source": "local",
+                "source": spec.get("source") or "local",
                 "tool_type": spec.get("tool_type"),
                 "direct_input_mode": spec.get("direct_input_mode"),
             })
@@ -62,13 +63,17 @@ class LocalToolAdapter:
 
     @staticmethod
     def _normalize_tool(tool: Any) -> Dict[str, Any]:
+        delegated_transport: Any = None
+        source: str | None = None
         if isinstance(tool, dict):
             handler = tool.get("handler") or tool.get("callable") or tool.get("fn")
             name = tool.get("name")
             description = tool.get("description")
-            parameters = tool.get("parameters") or tool.get("input_schema")
+            parameters = tool.get("parameters") or tool.get("input_schema") or tool.get("inputSchema")
             tool_type = tool.get("tool_type") or tool.get("toolType")
             direct_input_mode = tool.get("direct_input_mode") or tool.get("directInputMode")
+            delegated_transport = tool.get("delegated_transport") or tool.get("delegatedTransport")
+            source = tool.get("source")
         else:
             handler = tool.invoke if hasattr(tool, "invoke") else tool
             name = getattr(tool, "name", None) or getattr(handler, "__name__", None)
@@ -79,17 +84,28 @@ class LocalToolAdapter:
                 getattr(tool, "direct_input_mode", None)
                 or getattr(handler, "direct_input_mode", None)
             )
+            delegated_transport = (
+                getattr(tool, "delegated_transport", None)
+                or getattr(handler, "delegated_transport", None)
+            )
+            source = getattr(tool, "source", None) or getattr(handler, "source", None)
 
-        if not callable(handler):
-            raise ValueError("Local tool must provide a callable handler")
         if not name:
             raise ValueError("Local tool is missing a name")
+        if not callable(handler):
+            if delegated_transport is not None:
+                transport = DelegatedTransport(delegated_transport, name=name)
+                handler = transport.as_tool_handler()
+                source = source or "delegated_transport"
+            else:
+                raise ValueError("Local tool must provide a callable handler")
 
         return {
             "name": name,
             "description": (description or "").strip() or None,
             "parameters": parameters,
             "handler": handler,
+            "source": source or "local",
             "tool_type": normalize_tool_type(tool_type),
             "direct_input_mode": normalize_direct_input_mode(direct_input_mode),
         }

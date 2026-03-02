@@ -100,6 +100,55 @@ def delegate_to_subagent(query: str, dymium_context: dict | None = None) -> dict
     return {"result": sub_result.get("text", "")}
 ```
 
+For `SecureRuntime`, remote delegated handoffs can be automatic by defining a local delegated
+tool with `delegated_transport` (no custom handler required). Dymium forwards `dymium_context`,
+passes `placeholderMap`, and merges returned `placeholder_map` / `security_summary`.
+
+```python
+config = RuntimeConfig(
+    model="openai:gpt-5",
+    pii="presidio",
+    model_config={"api_key": "..."},
+    pii_config={"base_url": "http://localhost:5000"},
+    tools=[
+        {
+            "name": "run_specialist",
+            "description": "Delegate to a remote Dymium SecureRuntime instance.",
+            "parameters": {
+                "type": "object",
+                "properties": {"handoff_request": {"type": "string"}},
+                "required": ["handoff_request"],
+            },
+            "tool_type": "delegated",
+            "delegated_transport": {
+                "kind": "http",
+                "url": "http://specialist-agent:8080/invoke",
+                "prompt_arg": "handoff_request",
+                "timeout_s": 30,
+            },
+        }
+    ],
+)
+```
+
+For framework integrations, use `DelegatedTransport` inside delegated tools so remote handoffs
+are automatic without manual payload plumbing:
+
+```python
+from dymium import DelegatedTransport
+
+remote = DelegatedTransport(
+    {"kind": "http", "url": "http://specialist-agent:8080/invoke"},
+    name="run_specialist",
+)
+
+def run_specialist(handoff_request: str, customer_email: str, dymium_context: dict | None = None) -> dict:
+    return remote.invoke(
+        {"handoff_request": handoff_request, "customer_email": customer_email},
+        dymium_context=dymium_context,
+    )
+```
+
 ---
 
 ## LangChain Integration

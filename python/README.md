@@ -93,6 +93,14 @@ For in-process `LangChain`/`LangGraph` sub-agent handoffs where both parent and 
 For remote or non-Dymium child runtimes, propagate `dymium_context["placeholder_map"]` and
 `dymium_context["security_summary"]` explicitly and write updated values back.
 
+For `SecureRuntime`, delegated cross-instance calls can be automatic with `delegated_transport`
+on a local delegated tool (no custom handler needed). The runtime forwards
+`dymium_context`, includes `placeholderMap`, and merges returned `placeholder_map` and
+`security_summary`.
+
+For integration-managed tools (LangChain/LangGraph/LlamaIndex), use `DelegatedTransport`
+inside delegated tool handlers and pass `dymium_context` to `invoke(...)`.
+
 ## Install (local dev)
 
 From `SDK/python`:

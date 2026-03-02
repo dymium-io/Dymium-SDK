@@ -22,6 +22,36 @@
       "type": "string",
       "enum": ["resolve", "protect"],
       "description": "Direct-tool input handling. resolve (default) materializes originals at execution; protect keeps placeholders in direct tool args. Ignored for delegated tools."
+    },
+    "delegated_transport": {
+      "description": "Delegated remote transport. If set on a local delegated tool with no handler, runtime performs an automatic delegated handoff and propagates Dymium context.",
+      "oneOf": [
+        {
+          "type": "string",
+          "description": "Delegated invoke URL."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "type": "string", "enum": ["http"] },
+            "url": { "type": "string" },
+            "base_url": { "type": "string" },
+            "path": { "type": "string" },
+            "method": { "type": "string", "enum": ["POST"] },
+            "timeout_s": { "type": "number", "exclusiveMinimum": 0 },
+            "headers": {
+              "type": "object",
+              "additionalProperties": { "type": "string" }
+            },
+            "prompt_arg": { "type": "string" },
+            "messages_arg": { "type": "string" },
+            "include_args": { "type": "boolean" },
+            "recursion_limit": { "type": "integer", "minimum": 1 },
+            "security_context": { "type": "string", "enum": ["auto", "off"] }
+          }
+        }
+      ]
     }
   }
 }
