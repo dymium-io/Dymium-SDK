@@ -47,7 +47,14 @@ def register_default_adapters() -> None:
     This import is intentionally local to avoid heavy imports on module load.
     """
     from dymium.adapters.llm import OpenAIAdapter, GhostLLMAdapter, AnthropicAdapter, GeminiAdapter
-    from dymium.adapters.pii import GhostPIIDetector, PresidioDetector, ComprehendDetector, GoogleDLPDetector, AzurePIIDetector
+    from dymium.adapters.pii import (
+        GhostPIIDetector,
+        PresidioDetector,
+        ComprehendDetector,
+        GoogleDLPDetector,
+        AzurePIIDetector,
+        HuggingFacePIIDetector,
+    )
     from dymium.adapters.mcp import ExternalMCPAdapter, MultiMCPAdapter
 
     GLOBAL_REGISTRY.register(
@@ -100,8 +107,10 @@ def register_default_adapters() -> None:
         kind="pii",
         factory=lambda cfg: GhostPIIDetector(
             base_url=cfg["base_url"],
-            api_key=cfg.get("api_key"),
+            api_key=cfg["api_key"],
             timeout_s=cfg.get("timeout_s", 10),
+            entity_types=cfg.get("entity_types") or cfg.get("entityTypes"),
+            endpoint_path=cfg.get("endpoint_path", "/v1/detect/pii"),
             language=cfg.get("language", "en"),
             user_patterns=cfg.get("user_patterns"),
             regex_rules=cfg.get("regex_rules") or cfg.get("regexRules"),
@@ -166,6 +175,34 @@ def register_default_adapters() -> None:
             use_legacy_endpoint=cfg.get("use_legacy_endpoint", False),
             language=cfg.get("language", "en"),
             parameters=cfg.get("parameters"),
+            regex_rules=cfg.get("regex_rules") or cfg.get("regexRules"),
+        ),
+    )
+
+    GLOBAL_REGISTRY.register(
+        name="huggingface",
+        kind="pii",
+        factory=lambda cfg: HuggingFacePIIDetector(
+            model_id=cfg.get("model_id", "dymium/Dymium-NER-v1"),
+            aggregation_strategy=cfg.get("aggregation_strategy", "simple"),
+            score_threshold=cfg.get("score_threshold"),
+            device=cfg.get("device"),
+            tokenizer=cfg.get("tokenizer"),
+            pipeline_kwargs=cfg.get("pipeline_kwargs") or cfg.get("pipelineKwargs"),
+            regex_rules=cfg.get("regex_rules") or cfg.get("regexRules"),
+        ),
+    )
+
+    GLOBAL_REGISTRY.register(
+        name="dymium_hf",
+        kind="pii",
+        factory=lambda cfg: HuggingFacePIIDetector(
+            model_id=cfg.get("model_id", "dymium/Dymium-NER-v1"),
+            aggregation_strategy=cfg.get("aggregation_strategy", "simple"),
+            score_threshold=cfg.get("score_threshold"),
+            device=cfg.get("device"),
+            tokenizer=cfg.get("tokenizer"),
+            pipeline_kwargs=cfg.get("pipeline_kwargs") or cfg.get("pipelineKwargs"),
             regex_rules=cfg.get("regex_rules") or cfg.get("regexRules"),
         ),
     )

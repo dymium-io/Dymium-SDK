@@ -29,8 +29,9 @@ pip install dymium
 - `GoogleDLPDetector` (Google Cloud)
 - `AzurePIIDetector` (Azure)
 - `GhostPIIDetector` (Dymium Detect)
-  - Dymium Detect (cloud) — **TBD**
-  - Dymium Detector (local) — **TBD**
+  - Dymium Detect (cloud API)
+  - Dymium Detector (local) via `HuggingFacePIIDetector`
+- `HuggingFacePIIDetector` (local Transformers; optional deps)
 - Optional `regex_rules` (configured with the detector) to supplement the selected detector
 
 Configure detectors via `RuntimeConfig(pii="...", pii_config={...})` or by directly instantiating `Sanitizer`.
@@ -324,9 +325,12 @@ from dymium.detectors.pii import GhostPIIDetector
 
 sanitizer = Sanitizer(
     pii=GhostPIIDetector(
-        base_url="https://detect.example.internal",
-        api_key="...",  # optional
+        # either service root (SDK appends /v1/detect/pii)...
+        base_url="https://spoofcorp.llm.dymium.home:3000",
+        # ...or full endpoint URL ending in /v1/detect/pii
+        api_key="...",  # required
         timeout_s=10,
+        entity_types=["ID_REF", "EMAIL", "URL"],  # optional allow-list; defaults to all 13
         regex_rules=[{"pattern": "ORD-\\d+", "type": "ORDER_ID"}],
     ),
     redaction=RedactionEngine(),
@@ -390,6 +394,52 @@ sanitizer = Sanitizer(
         regex_rules=[{"pattern": "ORD-\\d+", "type": "ORDER_ID"}],
     ),
     redaction=RedactionEngine(),
+)
+```
+
+### Hugging Face (local Transformers)
+
+Install optional local inference dependencies:
+
+```bash
+pip install "dymium[hf]"
+```
+
+Use the built-in detector directly with `Sanitizer`:
+
+```python
+from dymium.detectors.pii import HuggingFacePIIDetector
+from dymium.sanitization import Sanitizer
+from dymium.redaction import RedactionEngine
+
+sanitizer = Sanitizer(
+    pii=HuggingFacePIIDetector(
+        model_id="dymium/Dymium-NER-v1",
+        aggregation_strategy="simple",
+        score_threshold=0.5,
+        # device=0,  # optional GPU index
+        regex_rules=[{"pattern": "ORD-\\d+", "type": "ORDER_ID"}],
+    ),
+    redaction=RedactionEngine(),
+)
+```
+
+Use with `SecureRuntime.from_config(...)`:
+
+```python
+from dymium import RuntimeConfig, SecureRuntime
+
+runtime = SecureRuntime.from_config(
+    RuntimeConfig(
+        model="openai:gpt-5",
+        pii="huggingface",  # alias: "dymium_hf"
+        model_config={"api_key": "..."},
+        pii_config={
+            "model_id": "dymium/Dymium-NER-v1",
+            "score_threshold": 0.5,
+        },
+        tools=[...],
+    )
 )
 ```
 
