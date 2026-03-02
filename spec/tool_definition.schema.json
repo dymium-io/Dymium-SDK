@@ -15,8 +15,13 @@
     },
     "tool_type": {
       "type": "string",
-      "enum": ["non_agentic", "agentic"],
-      "description": "Tool execution mode. non_agentic resolves placeholders before call; agentic receives placeholders and manages nested tool resolution itself."
+      "enum": ["direct", "delegated"],
+      "description": "Tool execution mode. direct resolves placeholders before call by default; delegated receives placeholders and manages nested tool resolution itself."
+    },
+    "direct_input_mode": {
+      "type": "string",
+      "enum": ["resolve", "protect"],
+      "description": "Direct-tool input handling. resolve (default) materializes originals at execution; protect keeps placeholders in direct tool args. Ignored for delegated tools."
     }
   }
 }

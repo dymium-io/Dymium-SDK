@@ -87,6 +87,7 @@ def create_sanitized_agent_workflow(
     ctx: SanitizationContext | None = None,
     system_prompt: str | None = DEFAULT_SYSTEM_PROMPT,
     tool_types: dict[str, str] | None = None,
+    tool_direct_input_modes: dict[str, str] | None = None,
     **kwargs: Any,
 ) -> Any:
     try:
@@ -108,6 +109,7 @@ def create_sanitized_agent_workflow(
         sanitizer,
         ctx,
         tool_types=tool_types,
+        tool_direct_input_modes=tool_direct_input_modes,
     )
 
     workflow = AgentWorkflow.from_tools_or_functions(

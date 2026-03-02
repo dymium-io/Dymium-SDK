@@ -21,7 +21,8 @@ config = RuntimeConfig(
     llm_config={"api_key": "..."},
     pii_config={"base_url": "http://localhost:5000"},
     mcp={"base_url": "http://localhost:7000"},
-    tool_types={"delegate_to_subagent": "agentic"},  # optional
+    tool_types={"delegate_to_subagent": "delegated"},  # optional
+    tool_direct_input_modes={"web_search": "protect"},  # optional
 )
 
 runtime = SecureRuntime.from_config(config)
@@ -72,11 +73,15 @@ session.run("My email is me@example.com.")
 session.run("Can you summarize what I told you?")
 ```
 
-## Tool types (agentic vs non-agentic)
+## Tool types (direct vs delegated)
 
 Use `tool_types` to define execution boundaries:
-- `non_agentic` (default): placeholders are resolved only at tool execution.
-- `agentic`: placeholders are passed to the delegated agent/tool runtime through `dymium_context`.
+- `direct` (default): placeholders are resolved only at tool execution.
+- `delegated`: placeholders are passed to the delegated agent/tool runtime through `dymium_context`.
+
+For direct tools, use `tool_direct_input_modes` to control argument handling:
+- `resolve` (default): materialize originals at execution time.
+- `protect`: keep placeholders in direct tool args.
 
 For in-process `LangChain`/`LangGraph` sub-agent handoffs where both parent and child use
 `DymiumMiddleware`, context propagation and merge are automatic.

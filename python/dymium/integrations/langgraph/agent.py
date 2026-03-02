@@ -52,6 +52,19 @@ class SanitizedLangGraphApp:
 from .tools import make_tool_node
 
 
+def _strip_remove_sentinels(messages: list[Any]) -> list[Any]:
+    out: list[Any] = []
+    for msg in messages:
+        if isinstance(msg, dict) and str(msg.get("id", "")) == "__remove_all__":
+            continue
+        if getattr(msg, "__class__", None) and msg.__class__.__name__ == "RemoveMessage":
+            continue
+        if str(getattr(msg, "id", "")) == "__remove_all__":
+            continue
+        out.append(msg)
+    return out
+
+
 def create_sanitized_agent(
     model: Any,
     tools: Sequence[Any],
@@ -62,6 +75,7 @@ def create_sanitized_agent(
     state_schema: Any = DymiumMessagesState,
     max_tool_calls: int | None = None,
     tool_types: Dict[str, str] | None = None,
+    tool_direct_input_modes: Dict[str, str] | None = None,
 ):
     """Create a compiled LangGraph app with sanitized model and tool boundaries."""
     try:
@@ -78,6 +92,7 @@ def create_sanitized_agent(
         sanitizer,
         messages_key=messages_key,
         tool_types=tool_types,
+        tool_direct_input_modes=tool_direct_input_modes,
     )
 
     def model_node(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -87,7 +102,8 @@ def create_sanitized_agent(
             system_prompt=system_prompt,
             messages_key=messages_key,
         )
-        ai_msg = model.invoke(updates[messages_key])
+        model_messages = _strip_remove_sentinels(list(updates[messages_key] or []))
+        ai_msg = model.invoke(model_messages)
         return {
             messages_key: [ai_msg],
             "placeholder_map": updates["placeholder_map"],

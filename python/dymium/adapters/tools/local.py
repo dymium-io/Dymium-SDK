@@ -4,7 +4,11 @@ from __future__ import annotations
 import inspect
 from typing import Any, Callable, Dict, Iterable, List
 
-from dymium.tools import TOOL_TYPE_AGENTIC, normalize_tool_type
+from dymium.tools import (
+    TOOL_TYPE_DELEGATED,
+    normalize_direct_input_mode,
+    normalize_tool_type,
+)
 
 
 class LocalToolAdapter:
@@ -28,6 +32,7 @@ class LocalToolAdapter:
                 "parameters": spec.get("parameters") or {"type": "object", "properties": {}},
                 "source": "local",
                 "tool_type": spec.get("tool_type"),
+                "direct_input_mode": spec.get("direct_input_mode"),
             })
         return out
 
@@ -63,12 +68,17 @@ class LocalToolAdapter:
             description = tool.get("description")
             parameters = tool.get("parameters") or tool.get("input_schema")
             tool_type = tool.get("tool_type") or tool.get("toolType")
+            direct_input_mode = tool.get("direct_input_mode") or tool.get("directInputMode")
         else:
             handler = tool.invoke if hasattr(tool, "invoke") else tool
             name = getattr(tool, "name", None) or getattr(handler, "__name__", None)
             description = getattr(tool, "description", None) or getattr(handler, "__doc__", None)
             parameters = getattr(tool, "parameters", None)
             tool_type = getattr(tool, "tool_type", None) or getattr(handler, "tool_type", None)
+            direct_input_mode = (
+                getattr(tool, "direct_input_mode", None)
+                or getattr(handler, "direct_input_mode", None)
+            )
 
         if not callable(handler):
             raise ValueError("Local tool must provide a callable handler")
@@ -81,6 +91,7 @@ class LocalToolAdapter:
             "parameters": parameters,
             "handler": handler,
             "tool_type": normalize_tool_type(tool_type),
+            "direct_input_mode": normalize_direct_input_mode(direct_input_mode),
         }
 
     @staticmethod
@@ -95,7 +106,7 @@ class LocalToolAdapter:
             return handler(args)
         call_args = dict(args)
         if (
-            normalize_tool_type(tool_type) == TOOL_TYPE_AGENTIC
+            normalize_tool_type(tool_type) == TOOL_TYPE_DELEGATED
             and "dymium_context" not in call_args
             and LocalToolAdapter._accepts_named_arg(handler, "dymium_context")
         ):

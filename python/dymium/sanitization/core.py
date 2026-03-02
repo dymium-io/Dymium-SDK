@@ -14,7 +14,7 @@ from typing import Any, Dict, Iterable, List, Tuple
 from dymium.core.pii import PIIEngine
 from dymium.core.redaction import RedactionEngineProtocol
 from dymium.redaction import RedactionEngine
-from dymium.tools import TOOL_TYPE_AGENTIC, normalize_tool_type
+from dymium.tools import TOOL_TYPE_DELEGATED, normalize_tool_type, should_resolve_tool_inputs
 
 
 PLACEHOLDER_RE = re.compile(r"\bPH_[A-Z]+_[A-Z0-9]{5}\b")
@@ -87,10 +87,14 @@ class Sanitizer:
         ctx: SanitizationContext,
         *,
         tool_type: str | None = None,
+        direct_input_mode: str | None = None,
     ) -> Any:
         if _contains_placeholders(args, ctx.placeholder_map):
             ctx.security_summary["tool_usage"]["sensitive_inputs_protected"] = True
-        if normalize_tool_type(tool_type) == TOOL_TYPE_AGENTIC:
+        if not should_resolve_tool_inputs(
+            tool_type=normalize_tool_type(tool_type),
+            direct_input_mode=direct_input_mode,
+        ):
             return args
         return _resolve_obj(args, ctx.placeholder_map, self.redaction)
 
@@ -102,7 +106,7 @@ class Sanitizer:
         *,
         tool_type: str | None = None,
     ) -> Any:
-        if normalize_tool_type(tool_type) == TOOL_TYPE_AGENTIC:
+        if normalize_tool_type(tool_type) == TOOL_TYPE_DELEGATED:
             tool_output, placeholder_updates, child_security_summary = _extract_agentic_metadata_from_output(tool_output)
             if placeholder_updates:
                 ctx.placeholder_map.update(placeholder_updates)

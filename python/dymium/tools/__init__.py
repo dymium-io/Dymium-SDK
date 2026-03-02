@@ -1,9 +1,21 @@
 """Tool registry and execution boundary helpers."""
 
-from .types import TOOL_TYPE_AGENTIC, TOOL_TYPE_NON_AGENTIC, normalize_tool_type
+from .types import (
+    DIRECT_INPUT_MODE_PROTECT,
+    DIRECT_INPUT_MODE_RESOLVE,
+    TOOL_TYPE_DELEGATED,
+    TOOL_TYPE_DIRECT,
+    normalize_direct_input_mode,
+    normalize_tool_type,
+    should_resolve_tool_inputs,
+)
 
 __all__ = [
-    "TOOL_TYPE_AGENTIC",
-    "TOOL_TYPE_NON_AGENTIC",
+    "DIRECT_INPUT_MODE_PROTECT",
+    "DIRECT_INPUT_MODE_RESOLVE",
+    "TOOL_TYPE_DELEGATED",
+    "TOOL_TYPE_DIRECT",
+    "normalize_direct_input_mode",
     "normalize_tool_type",
+    "should_resolve_tool_inputs",
 ]

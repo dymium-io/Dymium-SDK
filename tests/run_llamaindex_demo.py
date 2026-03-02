@@ -32,6 +32,7 @@ def _require_reachable(url: str) -> None:
 MAIN_CALLS: list[tuple[str, dict[str, Any]]] = []
 SUB_CALLS: list[tuple[str, dict[str, Any]]] = []
 PLACEHOLDER_RE = re.compile(r"PH_[A-Z]+_[A-Z0-9]{5}")
+PROTECTED_DIRECT_ARGS = {("lookup_customer", "email")}
 
 
 def main() -> None:
@@ -121,7 +122,7 @@ def main() -> None:
         customer_email: str,
         dymium_context: dict[str, Any] | None = None,
     ) -> dict:
-        """Agentic specialist: resolves placeholder inputs and runs sub-operations."""
+        """Delegated specialist: resolves placeholder inputs and runs sub-operations."""
         MAIN_CALLS.append(("run_carrier_specialist", {
             "tracking_number": tracking_number,
             "customer_phone": customer_phone,
@@ -181,14 +182,15 @@ def main() -> None:
         sanitizer=sanitizer,
         ctx=ctx,
         tool_types={
-            "lookup_customer": "non_agentic",
-            "list_recent_orders": "non_agentic",
-            "get_order_details": "non_agentic",
-            "get_shipping_status": "non_agentic",
-            "get_carrier_contact": "non_agentic",
-            "request_eta": "non_agentic",
-            "run_carrier_specialist": "agentic",
+            "lookup_customer": "direct",
+            "list_recent_orders": "direct",
+            "get_order_details": "direct",
+            "get_shipping_status": "direct",
+            "get_carrier_contact": "direct",
+            "request_eta": "direct",
+            "run_carrier_specialist": "delegated",
         },
+        tool_direct_input_modes={"lookup_customer": "protect"},
     )
 
     async def _run() -> Any:
@@ -241,13 +243,27 @@ def main() -> None:
         return False
 
     failures = 0
+    protected_seen = False
     for name, args in MAIN_CALLS:
         if name == "run_carrier_specialist":
             continue
         for key, value in args.items():
             if isinstance(value, str) and key in {"email", "phone", "customer_phone", "carrier_phone"}:
+                if (name, key) in PROTECTED_DIRECT_ARGS:
+                    if not PLACEHOLDER_RE.search(value):
+                        print(
+                            f"FAIL: protect mode did not preserve placeholder for {name}.{key}: {value}",
+                            file=sys.stderr,
+                        )
+                        failures += 1
+                    else:
+                        protected_seen = True
+                    continue
                 if _fail_if_placeholder(value, f"{name}.{key}"):
                     failures += 1
+    if not protected_seen:
+        print("FAIL: Did not observe protected direct arg for lookup_customer.email.", file=sys.stderr)
+        failures += 1
 
     specialist_args = next((a for n, a in MAIN_CALLS if n == "run_carrier_specialist"), None)
     if not specialist_args:

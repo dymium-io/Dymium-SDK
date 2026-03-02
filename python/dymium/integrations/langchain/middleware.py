@@ -18,7 +18,7 @@ except Exception:  # pragma: no cover - fallback for older envs
 
 from dymium.runtime.secure_runtime import DEFAULT_SYSTEM_PROMPT
 from dymium.sanitization import Sanitizer, SanitizationContext, ensure_security_summary
-from dymium.tools import TOOL_TYPE_AGENTIC, normalize_tool_type
+from dymium.tools import TOOL_TYPE_DELEGATED, normalize_direct_input_mode, normalize_tool_type
 from dataclasses import replace
 
 try:
@@ -123,11 +123,16 @@ class DymiumMiddleware:  # runtime import of AgentMiddleware below
         sanitizer: Sanitizer,
         system_prompt: str | None = DEFAULT_SYSTEM_PROMPT,
         tool_types: Dict[str, str] | None = None,
+        tool_direct_input_modes: Dict[str, str] | None = None,
         trace_hook: Callable[[str, Dict[str, Any]], None] | None = None,
     ) -> None:
         self.sanitizer = sanitizer
         self.system_prompt = system_prompt
         self.tool_types = {str(k): normalize_tool_type(v) for k, v in (tool_types or {}).items()}
+        self.tool_direct_input_modes = {
+            str(k): normalize_direct_input_mode(v)
+            for k, v in (tool_direct_input_modes or {}).items()
+        }
         self.trace_hook = trace_hook
 
         # Late import to keep langchain optional
@@ -234,13 +239,19 @@ class DymiumMiddleware:  # runtime import of AgentMiddleware below
         tool_call = getattr(request, "tool_call", None) or getattr(request, "get", lambda k, d=None: d)("tool_call", {})
         tool_name = _extract_tool_name(tool_call)
         tool_type = normalize_tool_type(self.tool_types.get(tool_name))
+        direct_input_mode = normalize_direct_input_mode(self.tool_direct_input_modes.get(tool_name))
         tool_args = _extract_tool_args(tool_call)
 
         self.sanitizer.record_tool_call(tool_name, ctx)
 
-        resolved_args = self.sanitizer.resolve_for_tool(tool_args, ctx, tool_type=tool_type)
+        resolved_args = self.sanitizer.resolve_for_tool(
+            tool_args,
+            ctx,
+            tool_type=tool_type,
+            direct_input_mode=direct_input_mode,
+        )
         agentic_ctx = None
-        if tool_type == TOOL_TYPE_AGENTIC and isinstance(resolved_args, dict):
+        if tool_type == TOOL_TYPE_DELEGATED and isinstance(resolved_args, dict):
             resolved_args = dict(resolved_args)
             existing_ctx = resolved_args.get("dymium_context")
             agentic_ctx = dict(existing_ctx) if isinstance(existing_ctx, dict) else {}
@@ -252,7 +263,7 @@ class DymiumMiddleware:  # runtime import of AgentMiddleware below
         tool_call = dict(tool_call)
         tool_call["args"] = resolved_args
         tool_call["arguments"] = resolved_args
-        if tool_type == TOOL_TYPE_AGENTIC and isinstance(agentic_ctx, dict):
+        if tool_type == TOOL_TYPE_DELEGATED and isinstance(agentic_ctx, dict):
             tool_call["dymium_context"] = agentic_ctx
 
         self._emit_trace(
@@ -268,7 +279,7 @@ class DymiumMiddleware:  # runtime import of AgentMiddleware below
 
         request = _update_request_tool_call(request, tool_call)
         ambient_token: contextvars.Token | None = None
-        if tool_type == TOOL_TYPE_AGENTIC and isinstance(agentic_ctx, dict):
+        if tool_type == TOOL_TYPE_DELEGATED and isinstance(agentic_ctx, dict):
             ambient_token = _push_agentic_context(agentic_ctx)
         try:
             result = handler(request)
@@ -285,7 +296,7 @@ class DymiumMiddleware:  # runtime import of AgentMiddleware below
                 _AGENTIC_CONTEXT_STACK.reset(ambient_token)
 
         if (
-            tool_type == TOOL_TYPE_AGENTIC
+            tool_type == TOOL_TYPE_DELEGATED
             and isinstance(agentic_ctx, dict)
             and not _has_agentic_metadata(_tool_result_payload(result))
         ):

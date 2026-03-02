@@ -45,6 +45,7 @@ class CombinedToolAdapter:
                         "parameters": tool.get("parameters"),
                         "source": tool.get("source"),
                         "tool_type": tool.get("tool_type"),
+                        "direct_input_mode": tool.get("direct_input_mode"),
                     })
 
         if conflicts and self.prefix_on_conflict:
@@ -61,6 +62,7 @@ class CombinedToolAdapter:
                         "parameters": tool.get("parameters"),
                         "source": tool.get("source"),
                         "tool_type": tool.get("tool_type"),
+                        "direct_input_mode": tool.get("direct_input_mode"),
                     })
 
         if conflicts and not self.prefix_on_conflict:

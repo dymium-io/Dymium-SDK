@@ -45,6 +45,7 @@ class MultiMCPAdapter:
                     "parameters": tool.get("parameters"),
                     "source": tool.get("source", "mcp"),
                     "tool_type": tool.get("tool_type"),
+                    "direct_input_mode": tool.get("direct_input_mode"),
                 })
         return out
 

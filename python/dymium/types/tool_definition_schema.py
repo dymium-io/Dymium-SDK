@@ -21,8 +21,14 @@ class ToolDefinition(BaseModel):
         Field(description='Tool origin (e.g., mcp, builtin, internal, external).'),
     ] = None
     tool_type: Annotated[
-        Literal['non_agentic', 'agentic'] | None,
+        Literal['direct', 'delegated'] | None,
         Field(
-            description='Tool execution mode. non_agentic resolves placeholders before call; agentic receives placeholders and manages nested tool resolution itself.'
+            description='Tool execution mode. direct resolves placeholders before call by default; delegated receives placeholders and manages nested tool resolution itself.'
+        ),
+    ] = None
+    direct_input_mode: Annotated[
+        Literal['resolve', 'protect'] | None,
+        Field(
+            description='Direct-tool input handling. resolve (default) materializes originals at execution; protect keeps placeholders in direct tool args. Ignored for delegated tools.'
         ),
     ] = None

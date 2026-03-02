@@ -5,7 +5,7 @@ from dataclasses import replace
 from typing import Any, Callable, Dict, Sequence
 
 from dymium.sanitization import Sanitizer, SanitizationContext, ensure_security_summary
-from dymium.tools import TOOL_TYPE_AGENTIC, normalize_tool_type
+from dymium.tools import TOOL_TYPE_DELEGATED, normalize_direct_input_mode, normalize_tool_type
 
 
 def make_tool_call_wrapper(
@@ -13,10 +13,15 @@ def make_tool_call_wrapper(
     *,
     messages_key: str = "messages",
     tool_types: Dict[str, str] | None = None,
+    tool_direct_input_modes: Dict[str, str] | None = None,
 ) -> Callable[[Any, Callable[[Any], Any]], Any]:
     normalized_tool_types = {
         str(k): normalize_tool_type(v)
         for k, v in (tool_types or {}).items()
+    }
+    normalized_direct_input_modes = {
+        str(k): normalize_direct_input_mode(v)
+        for k, v in (tool_direct_input_modes or {}).items()
     }
 
     def wrap_tool_call(request: Any, handler: Callable[[Any], Any]) -> Any:
@@ -31,13 +36,21 @@ def make_tool_call_wrapper(
         tool_name = tool_call.get("name") if isinstance(tool_call, dict) else None
         tool_args = tool_call.get("args", {}) if isinstance(tool_call, dict) else {}
         tool_type = normalize_tool_type(normalized_tool_types.get(tool_name))
+        direct_input_mode = normalize_direct_input_mode(
+            normalized_direct_input_modes.get(tool_name)
+        )
 
         sanitizer.record_tool_call(tool_name, ctx)
 
-        resolved_args = sanitizer.resolve_for_tool(tool_args, ctx, tool_type=tool_type)
+        resolved_args = sanitizer.resolve_for_tool(
+            tool_args,
+            ctx,
+            tool_type=tool_type,
+            direct_input_mode=direct_input_mode,
+        )
         agentic_ctx: Dict[str, Any] | None = None
         if (
-            tool_type == TOOL_TYPE_AGENTIC
+            tool_type == TOOL_TYPE_DELEGATED
             and isinstance(resolved_args, dict)
         ):
             resolved_args = dict(resolved_args)
@@ -50,7 +63,7 @@ def make_tool_call_wrapper(
             resolved_args["dymium_context"] = agentic_ctx
         tool_call = dict(tool_call)
         tool_call["args"] = resolved_args
-        if tool_type == TOOL_TYPE_AGENTIC and isinstance(agentic_ctx, dict):
+        if tool_type == TOOL_TYPE_DELEGATED and isinstance(agentic_ctx, dict):
             tool_call["dymium_context"] = agentic_ctx
 
         if hasattr(request, "override"):
@@ -58,7 +71,7 @@ def make_tool_call_wrapper(
 
         result = handler(request)
         if (
-            tool_type == TOOL_TYPE_AGENTIC
+            tool_type == TOOL_TYPE_DELEGATED
             and isinstance(agentic_ctx, dict)
             and not _has_agentic_metadata(result)
         ):
@@ -92,6 +105,7 @@ def make_tool_node(
     *,
     messages_key: str = "messages",
     tool_types: Dict[str, str] | None = None,
+    tool_direct_input_modes: Dict[str, str] | None = None,
     **kwargs: Any,
 ):
     try:
@@ -103,6 +117,7 @@ def make_tool_node(
         sanitizer,
         messages_key=messages_key,
         tool_types=tool_types,
+        tool_direct_input_modes=tool_direct_input_modes,
     )
     return ToolNode(tools, messages_key=messages_key, wrap_tool_call=wrap, **kwargs)
 

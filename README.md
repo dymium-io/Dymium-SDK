@@ -3,8 +3,8 @@
 Dymium is a security SDK for tool‑using LLM apps. It enforces a strict boundary:
 - The LLM only sees placeholderized sensitive values.
 - Tool type controls the boundary:
-  - `non_agentic`: placeholders are resolved only at execution time.
-  - `agentic`: placeholders are passed through to the delegated agent/tool runtime.
+  - `direct`: placeholders are resolved at execution time by default (configurable per tool).
+  - `delegated`: placeholders are passed through to the delegated agent/tool runtime.
 - Tool outputs are re‑sanitized before the LLM sees them.
 - The app/caller receives deobfuscated output plus a security summary.
 
@@ -61,12 +61,16 @@ final_text = sanitizer.deobfuscate("Email sent to PH_EMAIL_ABCDE", ctx)
 ## Tool Types (Optional)
 
 `tool_type` controls placeholder handling at tool boundaries:
-- `non_agentic` (default): resolve placeholders before the tool call.
-- `agentic`: pass placeholders through unchanged and pass runtime context to the delegated agent/tool.
+- `direct` (default): resolve placeholders before the tool call.
+- `delegated`: pass placeholders through unchanged and pass runtime context to the delegated agent/tool.
+
+For direct tools, optional `direct_input_mode` adds a per-tool knob:
+- `resolve` (default): materialize originals at execution time.
+- `protect`: keep placeholders in direct tool args.
 
 This behavior is supported in `SecureRuntime`, `LangChain`, `LangGraph`, and `LlamaIndex` integrations.
 
-For `agentic` tools, Dymium passes `dymium_context` with:
+For `delegated` tools, Dymium passes `dymium_context` with:
 - `placeholder_map`
 - `security_summary`
 
@@ -113,7 +117,8 @@ sanitizer = Sanitizer(
 
 middleware = DymiumMiddleware(
     sanitizer,
-    tool_types={"delegate_to_subagent": "agentic"},  # optional
+    tool_types={"delegate_to_subagent": "delegated"},  # optional
+    tool_direct_input_modes={"web_search": "protect"},  # optional
 ).middleware()
 
 agent = create_agent(
@@ -158,7 +163,8 @@ app = create_sanitized_agent(
     sanitizer=sanitizer,
     state_schema=DymiumMessagesState,
     max_tool_calls=10,
-    tool_types={"delegate_to_subagent": "agentic"},  # optional
+    tool_types={"delegate_to_subagent": "delegated"},  # optional
+    tool_direct_input_modes={"web_search": "protect"},  # optional
 )
 
 result = app.invoke(
@@ -200,7 +206,8 @@ workflow = create_sanitized_agent_workflow(
     llm=llm,
     sanitizer=sanitizer,
     ctx=ctx,
-    tool_types={"delegate_to_subagent": "agentic"},  # optional
+    tool_types={"delegate_to_subagent": "delegated"},  # optional
+    tool_direct_input_modes={"web_search": "protect"},  # optional
 )
 
 async def _run():
@@ -256,11 +263,13 @@ config = RuntimeConfig(
                 "properties": {"email": {"type": "string"}},
                 "required": ["email"],
             },
-            "tool_type": "non_agentic",
+            "tool_type": "direct",
+            "direct_input_mode": "resolve",
             "handler": lookup_customer,
         }
     ],
-    tool_types={"delegate_to_subagent": "agentic"},  # optional per-tool override
+    tool_types={"delegate_to_subagent": "delegated"},  # optional per-tool override
+    tool_direct_input_modes={"web_search": "protect"},  # optional direct-tool override
 )
 
 # Optional: add MCP alongside local tools.

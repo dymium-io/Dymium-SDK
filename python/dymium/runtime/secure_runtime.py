@@ -10,7 +10,12 @@ from dymium.redaction import RedactionEngine
 from dymium.sanitization import ensure_security_summary
 from dymium.types import ChatRequest
 from dymium.adapters.tools import CombinedToolAdapter, LocalToolAdapter
-from dymium.tools import TOOL_TYPE_AGENTIC, normalize_tool_type
+from dymium.tools import (
+    TOOL_TYPE_DELEGATED,
+    normalize_direct_input_mode,
+    normalize_tool_type,
+    should_resolve_tool_inputs,
+)
 
 
 DEFAULT_SYSTEM_PROMPT = (
@@ -29,10 +34,10 @@ DEFAULT_SYSTEM_PROMPT = (
     "- If a task requires properties of a placeholdered value (e.g., checking "
     "an email domain, formatting, or validity), refuse and explain that you "
     "cannot access the underlying value.\n"
-    "- You may call tools. Tool inputs may include placeholders. Non-agentic "
-    "tool inputs are resolved by the runtime at execution time; agentic tools "
-    "may receive placeholders directly. Tool outputs may include placeholders; "
-    "keep them as-is.\n"
+    "- You may call tools. Tool inputs may include placeholders. Direct "
+    "tool inputs may be resolved by the runtime at execution time depending on "
+    "tool policy; delegated tools may receive placeholders directly. Tool outputs "
+    "may include placeholders; keep them as-is.\n"
 )
 
 
@@ -47,11 +52,21 @@ class SecureRuntime(AgentRuntime):
     - stream placeholder updates to the caller
     """
 
-    def __init__(self, components: RuntimeComponents, *, tool_types: Dict[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        components: RuntimeComponents,
+        *,
+        tool_types: Dict[str, str] | None = None,
+        tool_direct_input_modes: Dict[str, str] | None = None,
+    ) -> None:
         self.components = components
         self._tool_types = {
             str(k): normalize_tool_type(v)
             for k, v in (tool_types or {}).items()
+        }
+        self._tool_direct_input_modes = {
+            str(k): normalize_direct_input_mode(v)
+            for k, v in (tool_direct_input_modes or {}).items()
         }
 
     @classmethod
@@ -64,7 +79,11 @@ class SecureRuntime(AgentRuntime):
         tools = cls._build_tools(config)
         redaction = RedactionEngine()
         components = RuntimeComponents(llm=llm, pii=pii, redaction=redaction, tools=tools)
-        return cls(components, tool_types=config.tool_types)
+        return cls(
+            components,
+            tool_types=config.tool_types,
+            tool_direct_input_modes=config.tool_direct_input_modes,
+        )
 
     def run(self, request: ChatRequest | Dict[str, Any]) -> Dict[str, Any]:
         if hasattr(request, "model_dump"):
@@ -104,6 +123,7 @@ class SecureRuntime(AgentRuntime):
         tool_results = []
         tool_defs = list(self.components.tools.list_tools() or [])
         tool_types = self._tool_types_by_name(tool_defs)
+        tool_direct_input_modes = self._tool_direct_input_modes_by_name(tool_defs)
         for _ in range(max_steps):
             llm_request: Dict[str, Any] = {"messages": messages}
             if tool_defs:
@@ -154,11 +174,19 @@ class SecureRuntime(AgentRuntime):
 
             for tc in tool_calls:
                 tool_type = normalize_tool_type(tool_types.get(tc.get("name")))
+                direct_input_mode = normalize_direct_input_mode(
+                    tool_direct_input_modes.get(tc.get("name"))
+                )
                 if self._contains_placeholders(tc.get("arguments"), placeholder_map):
                     tool_inputs_protected = True
-                execute_tc = self._prepare_tool_call_for_execution(tc, placeholder_map, tool_type=tool_type)
+                execute_tc = self._prepare_tool_call_for_execution(
+                    tc,
+                    placeholder_map,
+                    tool_type=tool_type,
+                    direct_input_mode=direct_input_mode,
+                )
                 agentic_ctx: Dict[str, Any] | None = None
-                if tool_type == TOOL_TYPE_AGENTIC:
+                if tool_type == TOOL_TYPE_DELEGATED:
                     execute_tc, agentic_ctx = self._attach_agentic_context(
                         execute_tc,
                         placeholder_map,
@@ -167,7 +195,7 @@ class SecureRuntime(AgentRuntime):
                     "placeholder_map": placeholder_map,
                     "dymium_context": agentic_ctx or {},
                 })
-                if tool_type == TOOL_TYPE_AGENTIC:
+                if tool_type == TOOL_TYPE_DELEGATED:
                     if isinstance(agentic_ctx, dict) and not self._has_agentic_metadata(result):
                         child_map = self._normalize_placeholder_map(agentic_ctx.get("placeholder_map"))
                         if child_map:
@@ -366,8 +394,12 @@ class SecureRuntime(AgentRuntime):
         placeholder_map: Dict[str, str],
         *,
         tool_type: str | None = None,
+        direct_input_mode: str | None = None,
     ) -> Dict[str, Any]:
-        if normalize_tool_type(tool_type) == TOOL_TYPE_AGENTIC:
+        if not should_resolve_tool_inputs(
+            tool_type=normalize_tool_type(tool_type),
+            direct_input_mode=normalize_direct_input_mode(direct_input_mode),
+        ):
             return dict(tool_call)
         resolved = dict(tool_call)
         args = tool_call.get("arguments")
@@ -449,6 +481,20 @@ class SecureRuntime(AgentRuntime):
                 continue
             out[str(name)] = normalize_tool_type(tool.get("tool_type"))
         out.update(self._tool_types)
+        return out
+
+    def _tool_direct_input_modes_by_name(self, tool_defs: Iterable[Dict[str, Any]]) -> Dict[str, str]:
+        out: Dict[str, str] = {}
+        for tool in tool_defs:
+            if not isinstance(tool, dict):
+                continue
+            name = tool.get("name")
+            if not name:
+                continue
+            out[str(name)] = normalize_direct_input_mode(
+                tool.get("direct_input_mode") or tool.get("directInputMode")
+            )
+        out.update(self._tool_direct_input_modes)
         return out
 
     @classmethod

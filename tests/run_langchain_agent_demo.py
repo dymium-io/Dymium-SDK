@@ -26,6 +26,7 @@ def _require_reachable(url: str) -> None:
 MAIN_CALLS: list[tuple[str, dict[str, Any]]] = []
 SUB_CALLS: list[tuple[str, dict[str, Any]]] = []
 PLACEHOLDER_RE = re.compile(r"PH_[A-Z]+_[A-Z0-9]{5}")
+PROTECTED_DIRECT_ARGS = {("lookup_customer", "email")}
 
 
 @tool
@@ -221,11 +222,11 @@ def main() -> None:
     sub_middleware = DymiumMiddleware(
         sub_sanitizer,
         tool_types={
-            "lookup_carrier_sla": "non_agentic",
-            "assess_delivery_exception": "non_agentic",
-            "open_carrier_callback": "non_agentic",
-            "create_hold_request": "non_agentic",
-            "enroll_delivery_alerts": "non_agentic",
+            "lookup_carrier_sla": "direct",
+            "assess_delivery_exception": "direct",
+            "open_carrier_callback": "direct",
+            "create_hold_request": "direct",
+            "enroll_delivery_alerts": "direct",
         },
     ).middleware()
     specialist_agent = create_agent(
@@ -301,14 +302,15 @@ def main() -> None:
     middleware = DymiumMiddleware(
         sanitizer,
         tool_types={
-            "lookup_customer": "non_agentic",
-            "list_recent_orders": "non_agentic",
-            "get_order_details": "non_agentic",
-            "get_shipping_status": "non_agentic",
-            "get_carrier_contact": "non_agentic",
-            "request_eta": "non_agentic",
-            "run_carrier_specialist": "agentic",
+            "lookup_customer": "direct",
+            "list_recent_orders": "direct",
+            "get_order_details": "direct",
+            "get_shipping_status": "direct",
+            "get_carrier_contact": "direct",
+            "request_eta": "direct",
+            "run_carrier_specialist": "delegated",
         },
+        tool_direct_input_modes={"lookup_customer": "protect"},
     ).middleware()
 
     agent = create_agent(
@@ -426,17 +428,31 @@ def main() -> None:
         else:
             print("PASS: Sub-agent calls are tied to run_carrier_specialist in summary.")
 
+    protected_seen = False
     for name, args in MAIN_CALLS:
         if name == "run_carrier_specialist":
             continue
         for key, value in args.items():
             if isinstance(value, str) and key in {"email", "phone", "customer_phone", "carrier_phone"}:
+                if (name, key) in PROTECTED_DIRECT_ARGS:
+                    if not PLACEHOLDER_RE.search(value):
+                        print(
+                            f"FAIL: protect mode did not preserve placeholder for {name}.{key}: {value}",
+                            file=sys.stderr,
+                        )
+                        failures += 1
+                    else:
+                        protected_seen = True
+                    continue
                 if PLACEHOLDER_RE.search(value):
                     print(
-                        f"FAIL: Placeholder leaked into non-agentic main tool arg for {name}.{key}: {value}",
+                        f"FAIL: Placeholder leaked into direct main tool arg for {name}.{key}: {value}",
                         file=sys.stderr,
                     )
                     failures += 1
+    if not protected_seen:
+        print("FAIL: Did not observe protected direct arg for lookup_customer.email.", file=sys.stderr)
+        failures += 1
 
     specialist_args = next((a for n, a in MAIN_CALLS if n == "run_carrier_specialist"), None)
     if not specialist_args:
@@ -449,12 +465,12 @@ def main() -> None:
             if k in {"customer_phone", "customer_email"}
         ):
             print(
-                "FAIL: agentic tool did not receive placeholderized sensitive args.",
+                "FAIL: delegated tool did not receive placeholderized sensitive args.",
                 file=sys.stderr,
             )
             failures += 1
         else:
-            print("PASS: agentic tool received placeholderized sensitive args.")
+            print("PASS: delegated tool received placeholderized sensitive args.")
         handoff_value = specialist_args.get("handoff_request")
         if not isinstance(handoff_value, str) or len(handoff_value.strip().split()) < 8:
             print("FAIL: handoff_request was not a meaningful natural-language request.", file=sys.stderr)
@@ -470,7 +486,7 @@ def main() -> None:
                 "customer_phone",
             } and PLACEHOLDER_RE.search(value):
                 print(
-                    f"FAIL: Placeholder leaked into sub-agent non-agentic tool arg for {name}.{key}: {value}",
+                    f"FAIL: Placeholder leaked into sub-agent direct tool arg for {name}.{key}: {value}",
                     file=sys.stderr,
                 )
                 failures += 1

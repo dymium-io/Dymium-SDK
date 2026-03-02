@@ -11,6 +11,7 @@ from dymium import RuntimeConfig, SecureRuntime
 MAIN_CALLS: list[tuple[str, dict[str, Any]]] = []
 SUB_CALLS: list[tuple[str, dict[str, Any]]] = []
 PLACEHOLDER_RE = re.compile(r"PH_[A-Z]+_[A-Z0-9]{5}")
+PROTECTED_DIRECT_ARGS = {("lookup_customer", "email")}
 
 
 TOOLS = [
@@ -75,7 +76,7 @@ TOOLS = [
     {
         "name": "run_carrier_specialist",
         "description": "Delegate delivery exception handling to specialist operations.",
-        "tool_type": "agentic",
+        "tool_type": "delegated",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -340,7 +341,8 @@ def main() -> None:
             llm_config={"api_key": os.getenv("OPENAI_API_KEY"), "model": model},
             pii_config={"base_url": presidio_url},
             mcp={"base_url": server.base_url},
-            tool_types={"run_carrier_specialist": "agentic"},
+            tool_types={"run_carrier_specialist": "delegated"},
+            tool_direct_input_modes={"lookup_customer": "protect"},
         )
         runtime = SecureRuntime.from_config(config)
 
@@ -395,13 +397,27 @@ def main() -> None:
             print(f"FAIL: Missing tool calls: {sorted(missing)}", file=sys.stderr)
             failures += 1
 
+        protected_seen = False
         for name, args in MAIN_CALLS:
             if name == "run_carrier_specialist":
                 continue
             for key, value in args.items():
+                if (name, key) in PROTECTED_DIRECT_ARGS:
+                    if not (isinstance(value, str) and PLACEHOLDER_RE.search(value)):
+                        print(
+                            f"FAIL: protect mode did not preserve placeholder for {name}.{key}: {value}",
+                            file=sys.stderr,
+                        )
+                        failures += 1
+                    else:
+                        protected_seen = True
+                    continue
                 if isinstance(value, str) and PLACEHOLDER_RE.search(value):
                     print(f"FAIL: Placeholder leaked into tool arg for {name}.{key}: {value}", file=sys.stderr)
                     failures += 1
+        if not protected_seen:
+            print("FAIL: Did not observe protected direct arg for lookup_customer.email.", file=sys.stderr)
+            failures += 1
 
         specialist_args = next((a for n, a in MAIN_CALLS if n == "run_carrier_specialist"), None)
         if not specialist_args:
