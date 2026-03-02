@@ -10,6 +10,10 @@ Package layout:
 - `dymium/types/`     Generated types from `sdk/spec`
 - `examples/`         Usage stubs and reference flows
 
+Hugging Face local PII detector (optional deps):
+- `dymium/adapters/pii/huggingface.py` (`HuggingFacePIIDetector`)
+- install extras: `pip install "dymium[hf]"`
+
 ## Quick start (factory-based)
 
 ```python

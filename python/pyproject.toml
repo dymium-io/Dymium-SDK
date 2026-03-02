@@ -23,6 +23,10 @@ test = [
   "mcp>=1.0.0",
   "langchain>=0.2.0",
 ]
+hf = [
+  "transformers>=4.41.0",
+  "torch>=2.2.0",
+]
 
 
 [tool.setuptools.packages.find]

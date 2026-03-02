@@ -6,6 +6,7 @@ from dymium.adapters.pii import (
     ComprehendDetector,
     GoogleDLPDetector,
     AzurePIIDetector,
+    HuggingFacePIIDetector,
 )
 
 __all__ = [
@@ -14,4 +15,5 @@ __all__ = [
     "ComprehendDetector",
     "GoogleDLPDetector",
     "AzurePIIDetector",
+    "HuggingFacePIIDetector",
 ]
