@@ -256,7 +256,6 @@ def _accepts_named_arg(func: Callable[..., Any], name: str) -> bool:
 def _build_agentic_context(ctx: SanitizationContext) -> Dict[str, Any]:
     return {
         "placeholder_map": dict(ctx.placeholder_map),
-        "security_summary": ensure_security_summary(),
         RUNTIME_CONTEXT_MARKER_KEY: RUNTIME_CONTEXT_MARKER_VALUE,
         RUNTIME_CONTEXT_ID_KEY: uuid.uuid4().hex,
     }

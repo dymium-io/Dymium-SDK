@@ -8,7 +8,6 @@ from dymium.core.contracts import AgentRuntime, RuntimeComponents
 from dymium.config import RuntimeConfig
 from dymium.registry import GLOBAL_REGISTRY, register_default_adapters
 from dymium.redaction import RedactionEngine
-from dymium.sanitization import ensure_security_summary
 from dymium.delegation.transport import (
     RUNTIME_CONTEXT_ID_KEY,
     RUNTIME_CONTEXT_MARKER_KEY,
@@ -430,7 +429,6 @@ class SecureRuntime(AgentRuntime):
         args.pop("dymium_context", None)
         agentic_ctx = {
             "placeholder_map": dict(placeholder_map),
-            "security_summary": ensure_security_summary(),
             RUNTIME_CONTEXT_MARKER_KEY: RUNTIME_CONTEXT_MARKER_VALUE,
             RUNTIME_CONTEXT_ID_KEY: uuid.uuid4().hex,
         }

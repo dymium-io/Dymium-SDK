@@ -64,7 +64,6 @@ def make_tool_call_wrapper(
             resolved_args.pop("dymium_context", None)
             agentic_ctx = {
                 "placeholder_map": dict(ctx.placeholder_map),
-                "security_summary": ensure_security_summary(),
                 RUNTIME_CONTEXT_MARKER_KEY: RUNTIME_CONTEXT_MARKER_VALUE,
                 RUNTIME_CONTEXT_ID_KEY: uuid.uuid4().hex,
             }

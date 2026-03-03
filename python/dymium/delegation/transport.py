@@ -128,10 +128,13 @@ class DelegatedTransport:
             placeholder_map = dymium_context.get("placeholder_map")
             if isinstance(placeholder_map, dict) and placeholder_map:
                 payload["placeholderMap"] = {str(k): str(v) for k, v in placeholder_map.items()}
-            security_summary = dymium_context.get("security_summary")
-            if isinstance(security_summary, dict):
-                payload["security_summary"] = security_summary
-            payload["dymium_context"] = dymium_context
+            payload["dymium_context"] = {
+                "placeholder_map": {str(k): str(v) for k, v in placeholder_map.items()}
+                if isinstance(placeholder_map, dict)
+                else {},
+                RUNTIME_CONTEXT_MARKER_KEY: dymium_context.get(RUNTIME_CONTEXT_MARKER_KEY),
+                RUNTIME_CONTEXT_ID_KEY: dymium_context.get(RUNTIME_CONTEXT_ID_KEY),
+            }
 
         return payload
 

@@ -263,7 +263,6 @@ class DymiumMiddleware:  # runtime import of AgentMiddleware below
             resolved_args.pop("dymium_context", None)
             agentic_ctx = {
                 "placeholder_map": dict(ctx.placeholder_map),
-                "security_summary": ensure_security_summary(),
                 RUNTIME_CONTEXT_MARKER_KEY: RUNTIME_CONTEXT_MARKER_VALUE,
                 RUNTIME_CONTEXT_ID_KEY: uuid.uuid4().hex,
             }
@@ -654,7 +653,7 @@ def _push_agentic_context(payload: Dict[str, Any]) -> contextvars.Token:
     stack = list(_AGENTIC_CONTEXT_STACK.get() or [])
     frame = {
         "placeholder_map": _normalize_placeholder_map(payload.get("placeholder_map")),
-        "security_summary": ensure_security_summary(payload.get("security_summary")),
+        "security_summary": ensure_security_summary(),
     }
     stack.append(frame)
     return _AGENTIC_CONTEXT_STACK.set(stack)
