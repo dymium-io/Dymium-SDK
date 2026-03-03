@@ -1,6 +1,10 @@
 # Dymium SDK
 
-Dymium is a security SDK for tool-using LLM apps that keeps sensitive values placeholderized across the model loop and only allows controlled exposure at tool boundaries. Each tool declares a `tool_type`: `direct` for non-agentic execution boundaries like local handlers, DB calls, and constrained APIs, or `delegated` for agentic handoffs to sub-agents or remote secured agents with their own LLM/tool loops. Direct tools also declare `input_mode`, where `resolve` materializes originals only at execution time for trusted operations that need exact values and `protect` keeps placeholders in tool arguments for broader tools where input leakage risk is unacceptable. Delegated tools receive protected inputs plus runtime context so downstream secured runtimes can continue safely, tool outputs are re-sanitized before returning to the LLM, and the app receives deobfuscated output with a security summary.
+Dymium is a security SDK for tool-using LLM apps. It keeps sensitive values placeholderized across the model loop and only allows controlled exposure at tool boundaries.
+
+Detection happens in the sanitizer layer using your configured PII detector (for example Presidio, Comprehend, Google DLP, Azure, Ghost, or Hugging Face). Sensitive values detected in user input and tool output are replaced with placeholders and tracked in runtime context, so agents can still reason over requests and drive tool workflows that depend on sensitive fields without ever seeing the raw values.
+
+Each tool declares how that protected context is handled. `tool_type="direct"` is for non-agentic execution boundaries (local handlers, DB/API calls, deterministic services) and requires `input_mode`: use `resolve` when the trusted tool must receive originals at execution time, or `protect` when placeholders must remain in tool args. `tool_type="delegated"` is for agentic handoffs (sub-agents or remote secured runtimes): Dymium forwards protected input plus runtime context so the downstream secured runtime can continue safely. Tool outputs are re-sanitized before returning to the model, and the app receives deobfuscated output with a security summary.
 
 This repo includes a framework-agnostic **Sanitization module**, an SDK-owned **SecureRuntime** orchestration loop, and integrations for **LangChain**, **LangGraph**, and **LlamaIndex**.
 
