@@ -78,14 +78,12 @@ For `delegated` tools, Dymium passes `dymium_context` with:
 Child runtimes can return updated `placeholder_map` and `security_summary` in
 `dymium_context`; Dymium merges those back into the parent flow.
 
-Single-path design for delegated handoffs:
-- Use transport-managed delegation only (`delegated_transport` / `DelegatedTransport`).
-- Do not manually plumb `placeholder_map` / `security_summary` in app tool code.
-- Delegated context must be runtime-managed by Dymium (tool-supplied/manual contexts are rejected).
+Delegated handoffs use transport-managed delegation (`delegated_transport` / `DelegatedTransport`).
+Delegated context is runtime-managed by Dymium.
 
 For `SecureRuntime`, remote delegated handoffs can be automatic by defining a local delegated
 tool with `delegated_transport` (no custom handler required). Dymium forwards `dymium_context`,
-passes `placeholderMap`, and merges returned child context updates.
+including `placeholderMap`.
 
 To include remote agents in the same security plane, the remote target must also run Dymium
 security (for example another `SecureRuntime` instance, or a framework agent wrapped with Dymium

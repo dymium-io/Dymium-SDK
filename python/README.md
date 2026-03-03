@@ -87,15 +87,12 @@ For direct tools, use `tool_direct_input_modes` to control argument handling:
 - `resolve` (default): materialize originals at execution time.
 - `protect`: keep placeholders in direct tool args.
 
-Single-path design for delegated handoffs:
-- Use transport-managed delegation only (`delegated_transport` / `DelegatedTransport`).
-- Do not manually propagate `placeholder_map` / `security_summary` in application tool code.
-- Delegated context must be runtime-managed by Dymium (tool-supplied/manual contexts are rejected).
+Delegated handoffs use transport-managed delegation (`delegated_transport` / `DelegatedTransport`).
+Delegated context is runtime-managed by Dymium.
 
 For `SecureRuntime`, delegated cross-instance calls can be automatic with `delegated_transport`
 on a local delegated tool (no custom handler needed). The runtime forwards
-`dymium_context`, includes `placeholderMap`, and merges returned child context updates
-(`placeholder_map`, `security_summary`).
+`dymium_context`, including `placeholderMap`.
 
 Remote delegated targets must also run Dymium security (another `SecureRuntime` instance or
 an integration path using Dymium sanitizer/middleware) to stay in the same security plane.
