@@ -71,8 +71,9 @@ For `direct` tools, `input_mode` is required:
   (for example web/search/send-style tools).
 
 `delegated` tools are agentic handoffs (sub-agent in-process or remote secured agent).  
-Dymium does not resolve originals for delegated handoffs. It forwards protected input and runtime context so the
-receiving secured agent can continue its own protected tool loop and resolve originals only at its own direct-tool boundary.
+Unlike `direct`, a delegated handoff crosses into another LLM/tool loop outside the parent loop, so resolving originals at
+the parent boundary would break the security plane. Dymium therefore keeps inputs protected and forwards runtime context so
+the receiving secured agent can continue safely and resolve originals only at its own `direct` tool boundary.
 
 This behavior is supported in `SecureRuntime`, `LangChain`, `LangGraph`, and `LlamaIndex`.
 - `SecureRuntime`: set policy on each tool definition (`tool_type`, `input_mode` for direct).
