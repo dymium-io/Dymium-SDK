@@ -1,17 +1,8 @@
 # Dymium SDK
 
-Dymium is a security SDK for tool‑using LLM apps. It enforces a strict boundary:
-- The LLM only sees placeholderized sensitive values.
-- Tool type controls the boundary:
-  - `direct`: placeholders are resolved at execution time by default (configurable per tool).
-  - `delegated`: placeholders are passed through to the delegated agent/tool runtime.
-- Tool outputs are re‑sanitized before the LLM sees them.
-- The app/caller receives deobfuscated output plus a security summary.
+Dymium is a security SDK for tool-using LLM apps that keeps sensitive values placeholderized across the model loop and only allows controlled exposure at tool boundaries. Each tool declares a `tool_type`: `direct` for non-agentic execution boundaries like local handlers, DB calls, and constrained APIs, or `delegated` for agentic handoffs to sub-agents or remote secured agents with their own LLM/tool loops. Direct tools also declare `input_mode`, where `resolve` materializes originals only at execution time for trusted operations that need exact values and `protect` keeps placeholders in tool arguments for broader tools where input leakage risk is unacceptable. Delegated tools receive protected inputs plus runtime context so downstream secured runtimes can continue safely, tool outputs are re-sanitized before returning to the LLM, and the app receives deobfuscated output with a security summary.
 
-This repo includes:
-- A **Sanitization module** (framework‑agnostic).
-- A **SecureRuntime** (SDK‑owned orchestration loop).
-- Framework integrations for **LangChain**, **LangGraph**, and **LlamaIndex**.
+This repo includes a framework-agnostic **Sanitization module**, an SDK-owned **SecureRuntime** orchestration loop, and integrations for **LangChain**, **LangGraph**, and **LlamaIndex**.
 
 ---
 
@@ -59,17 +50,30 @@ final_text = sanitizer.deobfuscate("Email sent to PH_EMAIL_ABCDE", ctx)
 
 ---
 
-## Tool Types (Optional)
+## Tool Types
 
-`tool_type` controls placeholder handling at tool boundaries:
-- `direct` (default): resolve placeholders before the tool call.
-- `delegated`: pass placeholders through unchanged and pass runtime context to the delegated agent/tool. This is intended for sub agents in the main agent runtime or for dymium secured agents running in separate instances altogether.
+Every tool must declare `tool_type`.
 
-For direct tools, optional `direct_input_mode` adds a per-tool knob:
-- `resolve` (default): materialize originals at execution time.
-- `protect`: keep placeholders in direct tool args.
+`direct` tools are non-agentic tools (local handlers, DB queries, constrained APIs).  
+For `direct` tools, `input_mode` is required:
+- `resolve`: Dymium resolves placeholders to originals at execution time only.  
+  Use this for trusted tools that need original values to function (for example a customer lookup API).
+  Common `resolve` cases while keeping the LLM blind to originals:
+  - exact-match identity/account lookups (email, phone, account id),
+  - order/shipment/ticket retrieval APIs keyed by customer contact fields,
+  - parameterized DB queries keyed by sensitive identifiers (email, phone, account id).
+- `protect`: Dymium keeps placeholders in args.  
+  Use this for broader or less constrained tools where leaking original PII via input is unacceptable
+  (for example web/search/send-style tools).
 
-This behavior is supported in `SecureRuntime`, `LangChain`, `LangGraph`, and `LlamaIndex` integrations.
+`delegated` tools are agentic handoffs (sub-agent in-process or remote secured agent).  
+Dymium does not resolve originals for delegated handoffs. It forwards protected input and runtime context so the
+receiving secured agent can continue its own protected tool loop and resolve originals only at its own direct-tool boundary.
+
+This behavior is supported in `SecureRuntime`, `LangChain`, `LangGraph`, and `LlamaIndex`.
+- `SecureRuntime`: set policy on each tool definition (`tool_type`, `input_mode` for direct).
+- Framework integrations: set policy on each tool object via
+  `tool.metadata["dymium"]["tool_type"]` and `tool.metadata["dymium"]["input_mode"]` (required for direct tools).
 
 For `delegated` tools, Dymium passes `dymium_context` with:
 - `placeholder_map`
@@ -150,15 +154,21 @@ sanitizer = Sanitizer(
     redaction=RedactionEngine(),
 )
 
-middleware = DymiumMiddleware(
-    sanitizer,
-    tool_types={"delegate_to_subagent": "delegated"},  # optional
-    tool_direct_input_modes={"web_search": "protect"},  # optional
-).middleware()
+tools = [...]  # Define tool objects first.
+
+for t in tools:
+    meta = dict(getattr(t, "metadata", {}) or {})
+    meta["dymium"] = {
+        "tool_type": "direct",
+        "input_mode": "resolve",
+    }
+    t.metadata = meta
+
+middleware = DymiumMiddleware(sanitizer, tools=tools).middleware()
 
 agent = create_agent(
     model="openai:gpt-5",
-    tools=[...],
+    tools=tools,
     middleware=[middleware],
 )
 
@@ -191,15 +201,22 @@ sanitizer = Sanitizer(
 )
 
 model = init_chat_model("openai:gpt-5")
+tools = [...]
+
+for t in tools:
+    meta = dict(getattr(t, "metadata", {}) or {})
+    meta["dymium"] = {
+        "tool_type": "direct",
+        "input_mode": "resolve",
+    }
+    t.metadata = meta
 
 app = create_sanitized_agent(
     model=model,
-    tools=[...],
+    tools=tools,
     sanitizer=sanitizer,
     state_schema=DymiumMessagesState,
     max_tool_calls=10,
-    tool_types={"delegate_to_subagent": "delegated"},  # optional
-    tool_direct_input_modes={"web_search": "protect"},  # optional
 )
 
 result = app.invoke(
@@ -236,13 +253,18 @@ llm = LlamaOpenAI(model="gpt-5")
 def lookup_customer(email: str) -> dict:
     return {"customer_id": "CUST-1001", "email": email}
 
+lookup_customer.metadata = {
+    "dymium": {
+        "tool_type": "direct",
+        "input_mode": "resolve",
+    }
+}
+
 workflow = create_sanitized_agent_workflow(
     tools_or_functions=[lookup_customer],
     llm=llm,
     sanitizer=sanitizer,
     ctx=ctx,
-    tool_types={"delegate_to_subagent": "delegated"},  # optional
-    tool_direct_input_modes={"web_search": "protect"},  # optional
 )
 
 async def _run():
@@ -299,12 +321,10 @@ config = RuntimeConfig(
                 "required": ["email"],
             },
             "tool_type": "direct",
-            "direct_input_mode": "resolve",
+            "input_mode": "resolve",
             "handler": lookup_customer,
         }
     ],
-    tool_types={"delegate_to_subagent": "delegated"},  # optional per-tool override
-    tool_direct_input_modes={"web_search": "protect"},  # optional direct-tool override
 )
 
 # Optional: add MCP alongside local tools.

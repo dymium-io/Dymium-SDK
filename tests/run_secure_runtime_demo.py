@@ -20,6 +20,8 @@ TOOLS = [
     {
         "name": "lookup_customer",
         "description": "Lookup customer by email.",
+        "tool_type": "direct",
+        "input_mode": "protect",
         "inputSchema": {
             "type": "object",
             "properties": {"email": {"type": "string"}},
@@ -29,6 +31,8 @@ TOOLS = [
     {
         "name": "list_recent_orders",
         "description": "List recent orders for a customer.",
+        "tool_type": "direct",
+        "input_mode": "resolve",
         "inputSchema": {
             "type": "object",
             "properties": {"customer_id": {"type": "string"}},
@@ -38,6 +42,8 @@ TOOLS = [
     {
         "name": "get_order_details",
         "description": "Get detailed order information including tracking and ship contact.",
+        "tool_type": "direct",
+        "input_mode": "resolve",
         "inputSchema": {
             "type": "object",
             "properties": {"order_id": {"type": "string"}},
@@ -47,6 +53,8 @@ TOOLS = [
     {
         "name": "get_shipping_status",
         "description": "Get shipping status for an order and phone on file.",
+        "tool_type": "direct",
+        "input_mode": "resolve",
         "inputSchema": {
             "type": "object",
             "properties": {"order_id": {"type": "string"}, "phone": {"type": "string"}},
@@ -56,6 +64,8 @@ TOOLS = [
     {
         "name": "get_carrier_contact",
         "description": "Get carrier contact info for a tracking number.",
+        "tool_type": "direct",
+        "input_mode": "resolve",
         "inputSchema": {
             "type": "object",
             "properties": {"tracking_number": {"type": "string"}},
@@ -65,6 +75,8 @@ TOOLS = [
     {
         "name": "request_eta",
         "description": "Request ETA from carrier for a tracking number.",
+        "tool_type": "direct",
+        "input_mode": "resolve",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -412,6 +424,8 @@ class RemoteRuntimeServer:
                 {
                     "name": "remote_lookup_case",
                     "description": "Create or lookup escalation case for customer contact.",
+                    "tool_type": "direct",
+                    "input_mode": "resolve",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -425,6 +439,8 @@ class RemoteRuntimeServer:
                 {
                     "name": "remote_notify_ops",
                     "description": "Notify remote ops queue and open callback ticket.",
+                    "tool_type": "direct",
+                    "input_mode": "resolve",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -523,8 +539,6 @@ def main() -> None:
                     },
                 }
             ],
-            tool_types={"run_carrier_specialist": "delegated"},
-            tool_direct_input_modes={"lookup_customer": "protect"},
         )
         runtime = SecureRuntime.from_config(config)
 

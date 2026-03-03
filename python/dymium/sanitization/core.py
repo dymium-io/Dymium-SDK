@@ -87,13 +87,13 @@ class Sanitizer:
         ctx: SanitizationContext,
         *,
         tool_type: str | None = None,
-        direct_input_mode: str | None = None,
+        input_mode: str | None = None,
     ) -> Any:
         if _contains_placeholders(args, ctx.placeholder_map):
             ctx.security_summary["tool_usage"]["sensitive_inputs_protected"] = True
         if not should_resolve_tool_inputs(
             tool_type=normalize_tool_type(tool_type),
-            direct_input_mode=direct_input_mode,
+            input_mode=input_mode,
         ):
             return args
         return _resolve_obj(args, ctx.placeholder_map, self.redaction)

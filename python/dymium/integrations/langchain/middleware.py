@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import contextvars
 import uuid
-from typing import Any, Dict, List, Annotated, Callable
+from typing import Any, Dict, Iterable, List, Annotated, Callable
 
 try:
     from typing_extensions import TypedDict
@@ -24,7 +24,8 @@ from dymium.delegation.transport import (
     RUNTIME_CONTEXT_MARKER_KEY,
     RUNTIME_CONTEXT_MARKER_VALUE,
 )
-from dymium.tools import TOOL_TYPE_DELEGATED, normalize_direct_input_mode, normalize_tool_type
+from dymium.tools import TOOL_TYPE_DELEGATED, normalize_input_mode, normalize_tool_type
+from dymium.integrations.tool_policy import extract_tool_policies
 from dataclasses import replace
 
 try:
@@ -127,18 +128,13 @@ class DymiumMiddleware:  # runtime import of AgentMiddleware below
     def __init__(
         self,
         sanitizer: Sanitizer,
+        tools: Iterable[Any],
         system_prompt: str | None = DEFAULT_SYSTEM_PROMPT,
-        tool_types: Dict[str, str] | None = None,
-        tool_direct_input_modes: Dict[str, str] | None = None,
         trace_hook: Callable[[str, Dict[str, Any]], None] | None = None,
     ) -> None:
         self.sanitizer = sanitizer
         self.system_prompt = system_prompt
-        self.tool_types = {str(k): normalize_tool_type(v) for k, v in (tool_types or {}).items()}
-        self.tool_direct_input_modes = {
-            str(k): normalize_direct_input_mode(v)
-            for k, v in (tool_direct_input_modes or {}).items()
-        }
+        self.tool_types, self.tool_input_modes = extract_tool_policies(tools)
         self.trace_hook = trace_hook
 
         # Late import to keep langchain optional
@@ -245,7 +241,7 @@ class DymiumMiddleware:  # runtime import of AgentMiddleware below
         tool_call = getattr(request, "tool_call", None) or getattr(request, "get", lambda k, d=None: d)("tool_call", {})
         tool_name = _extract_tool_name(tool_call)
         tool_type = normalize_tool_type(self.tool_types.get(tool_name))
-        direct_input_mode = normalize_direct_input_mode(self.tool_direct_input_modes.get(tool_name))
+        input_mode = normalize_input_mode(self.tool_input_modes.get(tool_name))
         tool_args = _extract_tool_args(tool_call)
 
         self.sanitizer.record_tool_call(tool_name, ctx)
@@ -254,7 +250,7 @@ class DymiumMiddleware:  # runtime import of AgentMiddleware below
             tool_args,
             ctx,
             tool_type=tool_type,
-            direct_input_mode=direct_input_mode,
+            input_mode=input_mode,
         )
         agentic_ctx = None
         if tool_type == TOOL_TYPE_DELEGATED and isinstance(resolved_args, dict):

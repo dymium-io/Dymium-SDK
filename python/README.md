@@ -25,8 +25,6 @@ config = RuntimeConfig(
     llm_config={"api_key": "..."},
     pii_config={"base_url": "http://localhost:5000"},
     mcp={"base_url": "http://localhost:7000"},
-    tool_types={"delegate_to_subagent": "delegated"},  # optional
-    tool_direct_input_modes={"web_search": "protect"},  # optional
 )
 
 runtime = SecureRuntime.from_config(config)
@@ -79,13 +77,22 @@ session.run("Can you summarize what I told you?")
 
 ## Tool types (direct vs delegated)
 
-Use `tool_types` to define execution boundaries:
-- `direct` (default): placeholders are resolved only at tool execution.
-- `delegated`: placeholders are passed to the delegated agent/tool runtime through `dymium_context`.
+Every tool must declare `tool_type`.
 
-For direct tools, use `tool_direct_input_modes` to control argument handling:
-- `resolve` (default): materialize originals at execution time.
+`direct` tools are non-agentic boundaries (local functions, DB/API calls, deterministic services).  
+`direct` tools must also declare `input_mode`:
+- `resolve`: materialize originals only at execution time.
+  Common `resolve` cases: identity/account lookups, order/ticket retrieval APIs,
+  and fraud/KYC checks that require real identifiers at call time.
 - `protect`: keep placeholders in direct tool args.
+
+`delegated` tools are agentic handoffs to another runtime (sub-agent or remote agent).
+Dymium forwards protected input and runtime context to delegated runtimes instead of resolving originals.
+
+Policy location:
+- `SecureRuntime`: set `tool_type` (and `input_mode` for direct tools) on each tool definition.
+- Framework integrations: set `tool.metadata["dymium"]["tool_type"]` and
+  `tool.metadata["dymium"]["input_mode"]` (required for direct tools).
 
 Delegated handoffs use transport-managed delegation (`delegated_transport` / `DelegatedTransport`).
 Delegated context is runtime-managed by Dymium.

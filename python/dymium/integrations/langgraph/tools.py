@@ -11,7 +11,7 @@ from dymium.delegation.transport import (
     RUNTIME_CONTEXT_MARKER_KEY,
     RUNTIME_CONTEXT_MARKER_VALUE,
 )
-from dymium.tools import TOOL_TYPE_DELEGATED, normalize_direct_input_mode, normalize_tool_type
+from dymium.tools import TOOL_TYPE_DELEGATED, normalize_input_mode, normalize_tool_type
 
 
 def make_tool_call_wrapper(
@@ -19,15 +19,15 @@ def make_tool_call_wrapper(
     *,
     messages_key: str = "messages",
     tool_types: Dict[str, str] | None = None,
-    tool_direct_input_modes: Dict[str, str] | None = None,
+    tool_input_modes: Dict[str, str] | None = None,
 ) -> Callable[[Any, Callable[[Any], Any]], Any]:
     normalized_tool_types = {
         str(k): normalize_tool_type(v)
         for k, v in (tool_types or {}).items()
     }
-    normalized_direct_input_modes = {
-        str(k): normalize_direct_input_mode(v)
-        for k, v in (tool_direct_input_modes or {}).items()
+    normalized_input_modes = {
+        str(k): normalize_input_mode(v)
+        for k, v in (tool_input_modes or {}).items()
     }
 
     def wrap_tool_call(request: Any, handler: Callable[[Any], Any]) -> Any:
@@ -42,8 +42,8 @@ def make_tool_call_wrapper(
         tool_name = tool_call.get("name") if isinstance(tool_call, dict) else None
         tool_args = tool_call.get("args", {}) if isinstance(tool_call, dict) else {}
         tool_type = normalize_tool_type(normalized_tool_types.get(tool_name))
-        direct_input_mode = normalize_direct_input_mode(
-            normalized_direct_input_modes.get(tool_name)
+        input_mode = normalize_input_mode(
+            normalized_input_modes.get(tool_name)
         )
 
         sanitizer.record_tool_call(tool_name, ctx)
@@ -52,7 +52,7 @@ def make_tool_call_wrapper(
             tool_args,
             ctx,
             tool_type=tool_type,
-            direct_input_mode=direct_input_mode,
+            input_mode=input_mode,
         )
         agentic_ctx: Dict[str, Any] | None = None
         if (
@@ -108,7 +108,7 @@ def make_tool_node(
     *,
     messages_key: str = "messages",
     tool_types: Dict[str, str] | None = None,
-    tool_direct_input_modes: Dict[str, str] | None = None,
+    tool_input_modes: Dict[str, str] | None = None,
     **kwargs: Any,
 ):
     try:
@@ -120,7 +120,7 @@ def make_tool_node(
         sanitizer,
         messages_key=messages_key,
         tool_types=tool_types,
-        tool_direct_input_modes=tool_direct_input_modes,
+        tool_input_modes=tool_input_modes,
     )
     return ToolNode(tools, messages_key=messages_key, wrap_tool_call=wrap, **kwargs)
 

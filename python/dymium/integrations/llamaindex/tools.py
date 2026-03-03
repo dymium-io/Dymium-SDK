@@ -12,7 +12,7 @@ from dymium.delegation.transport import (
     RUNTIME_CONTEXT_MARKER_KEY,
     RUNTIME_CONTEXT_MARKER_VALUE,
 )
-from dymium.tools import TOOL_TYPE_DELEGATED, normalize_direct_input_mode, normalize_tool_type
+from dymium.tools import TOOL_TYPE_DELEGATED, normalize_input_mode, normalize_tool_type
 
 
 def wrap_tool_callable(
@@ -22,11 +22,11 @@ def wrap_tool_callable(
     *,
     tool_name: str | None = None,
     tool_type: str | None = None,
-    direct_input_mode: str | None = None,
+    input_mode: str | None = None,
 ) -> Callable[..., Any]:
     name = tool_name or getattr(func, "__name__", "tool")
     normalized_tool_type = normalize_tool_type(tool_type)
-    normalized_direct_input_mode = normalize_direct_input_mode(direct_input_mode)
+    normalized_input_mode = normalize_input_mode(input_mode)
 
     @wraps(func)
     def wrapped(*args: Any, **kwargs: Any) -> Any:
@@ -38,7 +38,7 @@ def wrap_tool_callable(
             sanitizer,
             ctx,
             tool_type=normalized_tool_type,
-            direct_input_mode=normalized_direct_input_mode,
+            input_mode=normalized_input_mode,
         )
         result = func(*resolved_args, **resolved_kwargs)
         if normalized_tool_type == TOOL_TYPE_DELEGATED and isinstance(agentic_ctx, dict):
@@ -62,7 +62,7 @@ def wrap_tool(
     *,
     tool_name: str | None = None,
     tool_type: str | None = None,
-    direct_input_mode: str | None = None,
+    input_mode: str | None = None,
 ) -> Any:
     if callable(tool) and not _has_tool_metadata(tool):
         return wrap_tool_callable(
@@ -71,7 +71,7 @@ def wrap_tool(
             ctx,
             tool_name=tool_name,
             tool_type=tool_type,
-            direct_input_mode=direct_input_mode,
+            input_mode=input_mode,
         )
     return _ToolProxy(
         tool,
@@ -79,7 +79,7 @@ def wrap_tool(
         ctx,
         tool_name=tool_name,
         tool_type=tool_type,
-        direct_input_mode=direct_input_mode,
+        input_mode=input_mode,
     )
 
 
@@ -89,15 +89,15 @@ def wrap_tools(
     ctx: SanitizationContext,
     *,
     tool_types: Dict[str, str] | None = None,
-    tool_direct_input_modes: Dict[str, str] | None = None,
+    tool_input_modes: Dict[str, str] | None = None,
 ) -> List[Any]:
     normalized_tool_types = {
         str(k): normalize_tool_type(v)
         for k, v in (tool_types or {}).items()
     }
-    normalized_direct_input_modes = {
-        str(k): normalize_direct_input_mode(v)
-        for k, v in (tool_direct_input_modes or {}).items()
+    normalized_input_modes = {
+        str(k): normalize_input_mode(v)
+        for k, v in (tool_input_modes or {}).items()
     }
     return [
         wrap_tool(
@@ -105,7 +105,7 @@ def wrap_tools(
             sanitizer,
             ctx,
             tool_type=normalized_tool_types.get(_tool_name(tool)),
-            direct_input_mode=normalized_direct_input_modes.get(_tool_name(tool)),
+            input_mode=normalized_input_modes.get(_tool_name(tool)),
         )
         for tool in tools
     ]
@@ -120,15 +120,17 @@ class _ToolProxy:
         *,
         tool_name: str | None = None,
         tool_type: str | None = None,
-        direct_input_mode: str | None = None,
+        input_mode: str | None = None,
     ) -> None:
         self._tool = tool
         self._sanitizer = sanitizer
         self._ctx = ctx
         metadata = getattr(tool, "metadata", None)
         self._name = tool_name or getattr(metadata, "name", None) or getattr(tool, "__name__", "tool")
+        # Preserve callable identity expected by tool registries.
+        self.__name__ = self._name
         self._tool_type = normalize_tool_type(tool_type)
-        self._direct_input_mode = normalize_direct_input_mode(direct_input_mode)
+        self._input_mode = normalize_input_mode(input_mode)
 
     @property
     def metadata(self) -> Any:
@@ -143,7 +145,7 @@ class _ToolProxy:
             self._sanitizer,
             self._ctx,
             tool_type=self._tool_type,
-            direct_input_mode=self._direct_input_mode,
+            input_mode=self._input_mode,
         )
         result = self._tool(*resolved_args, **resolved_kwargs)
         if self._tool_type == TOOL_TYPE_DELEGATED and isinstance(agentic_ctx, dict):
@@ -164,7 +166,7 @@ class _ToolProxy:
             self._sanitizer,
             self._ctx,
             tool_type=self._tool_type,
-            direct_input_mode=self._direct_input_mode,
+            input_mode=self._input_mode,
         )
         if hasattr(self._tool, "acall"):
             result = await self._tool.acall(*resolved_args, **resolved_kwargs)
@@ -188,10 +190,10 @@ def _resolve_invocation(
     ctx: SanitizationContext,
     *,
     tool_type: str | None = None,
-    direct_input_mode: str | None = None,
+    input_mode: str | None = None,
 ) -> tuple[tuple[Any, ...], dict[str, Any], Dict[str, Any] | None]:
     normalized_tool_type = normalize_tool_type(tool_type)
-    normalized_direct_input_mode = normalize_direct_input_mode(direct_input_mode)
+    normalized_input_mode = normalize_input_mode(input_mode)
     agentic_ctx: Dict[str, Any] | None = None
     try:
         signature = inspect.signature(func)
@@ -200,7 +202,7 @@ def _resolve_invocation(
             dict(bound.arguments),
             ctx,
             tool_type=normalized_tool_type,
-            direct_input_mode=normalized_direct_input_mode,
+            input_mode=normalized_input_mode,
         )
         if normalized_tool_type == TOOL_TYPE_DELEGATED and isinstance(resolved, dict):
             agentic_ctx = _build_agentic_context(ctx)
@@ -217,14 +219,14 @@ def _resolve_invocation(
                 list(args),
                 ctx,
                 tool_type=normalized_tool_type,
-                direct_input_mode=normalized_direct_input_mode,
+                input_mode=normalized_input_mode,
             )
         )
         resolved_kwargs = sanitizer.resolve_for_tool(
             dict(kwargs),
             ctx,
             tool_type=normalized_tool_type,
-            direct_input_mode=normalized_direct_input_mode,
+            input_mode=normalized_input_mode,
         )
         if normalized_tool_type == TOOL_TYPE_DELEGATED and _accepts_named_arg(func, "dymium_context"):
             agentic_ctx = _build_agentic_context(ctx)

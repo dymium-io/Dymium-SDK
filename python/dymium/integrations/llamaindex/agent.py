@@ -6,6 +6,7 @@ from typing import Any, Iterable
 
 from dymium.runtime.secure_runtime import DEFAULT_SYSTEM_PROMPT
 from dymium.sanitization import Sanitizer, SanitizationContext, ensure_security_summary
+from dymium.integrations.tool_policy import extract_tool_policies
 
 from .llm import SanitizedLLM
 from .tools import wrap_tools
@@ -86,8 +87,6 @@ def create_sanitized_agent_workflow(
     *,
     ctx: SanitizationContext | None = None,
     system_prompt: str | None = DEFAULT_SYSTEM_PROMPT,
-    tool_types: dict[str, str] | None = None,
-    tool_direct_input_modes: dict[str, str] | None = None,
     **kwargs: Any,
 ) -> Any:
     try:
@@ -97,6 +96,9 @@ def create_sanitized_agent_workflow(
             "LlamaIndex is not installed. Install with: pip install llama-index llama-index-llms-openai"
         ) from exc
 
+    tool_list = list(tools_or_functions)
+    tool_types, tool_input_modes = extract_tool_policies(tool_list)
+
     ctx = ctx or SanitizationContext(security_summary=ensure_security_summary())
     safe_llm = SanitizedLLM(
         llm,
@@ -105,11 +107,11 @@ def create_sanitized_agent_workflow(
         system_prompt=system_prompt,
     )
     safe_tools = wrap_tools(
-        tools_or_functions,
+        tool_list,
         sanitizer,
         ctx,
         tool_types=tool_types,
-        tool_direct_input_modes=tool_direct_input_modes,
+        tool_input_modes=tool_input_modes,
     )
 
     workflow = AgentWorkflow.from_tools_or_functions(

@@ -35,6 +35,27 @@ PLACEHOLDER_RE = re.compile(r"PH_[A-Z]+_[A-Z0-9]{5}")
 PROTECTED_DIRECT_ARGS = {("lookup_customer", "email")}
 
 
+def _set_tool_policy(tool_obj: Any, *, tool_type: str, input_mode: str | None = None) -> Any:
+    metadata = getattr(tool_obj, "metadata", None)
+    if not isinstance(metadata, dict):
+        metadata = {}
+    else:
+        metadata = dict(metadata)
+    dymium_meta = metadata.get("dymium")
+    if not isinstance(dymium_meta, dict):
+        dymium_meta = {}
+    else:
+        dymium_meta = dict(dymium_meta)
+    dymium_meta["tool_type"] = tool_type
+    if input_mode is not None:
+        dymium_meta["input_mode"] = input_mode
+    else:
+        dymium_meta.pop("input_mode", None)
+    metadata["dymium"] = dymium_meta
+    tool_obj.metadata = metadata
+    return tool_obj
+
+
 class RemoteRuntimeHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A003 - BaseHTTPRequestHandler signature
         return
@@ -144,6 +165,8 @@ class RemoteRuntimeServer:
                 {
                     "name": "remote_lookup_case",
                     "description": "Create or lookup escalation case for customer contact.",
+                    "tool_type": "direct",
+                    "input_mode": "resolve",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -157,6 +180,8 @@ class RemoteRuntimeServer:
                 {
                     "name": "remote_notify_ops",
                     "description": "Notify remote ops queue and open callback ticket.",
+                    "tool_type": "direct",
+                    "input_mode": "resolve",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -390,25 +415,17 @@ def main() -> None:
         pii=PresidioDetector(base_url=presidio_url),
         redaction=RedactionEngine(),
     )
-    sub_middleware = DymiumMiddleware(
-        sub_sanitizer,
-        tool_types={
-            "lookup_carrier_sla": "direct",
-            "assess_delivery_exception": "direct",
-            "open_carrier_callback": "direct",
-            "create_hold_request": "direct",
-            "enroll_delivery_alerts": "direct",
-        },
-    ).middleware()
+    sub_tools = [
+        _set_tool_policy(lookup_carrier_sla, tool_type="direct", input_mode="resolve"),
+        _set_tool_policy(assess_delivery_exception, tool_type="direct", input_mode="resolve"),
+        _set_tool_policy(open_carrier_callback, tool_type="direct", input_mode="resolve"),
+        _set_tool_policy(create_hold_request, tool_type="direct", input_mode="resolve"),
+        _set_tool_policy(enroll_delivery_alerts, tool_type="direct", input_mode="resolve"),
+    ]
+    sub_middleware = DymiumMiddleware(sub_sanitizer, tools=sub_tools).middleware()
     specialist_agent = create_agent(
         model=model,
-        tools=[
-            lookup_carrier_sla,
-            assess_delivery_exception,
-            open_carrier_callback,
-            create_hold_request,
-            enroll_delivery_alerts,
-        ],
+        tools=sub_tools,
         middleware=[sub_middleware],
     )
 
@@ -492,33 +509,21 @@ def main() -> None:
         pii=PresidioDetector(base_url=presidio_url),
         redaction=RedactionEngine(),
     )
-    middleware = DymiumMiddleware(
-        sanitizer,
-        tool_types={
-            "lookup_customer": "direct",
-            "list_recent_orders": "direct",
-            "get_order_details": "direct",
-            "get_shipping_status": "direct",
-            "get_carrier_contact": "direct",
-            "request_eta": "direct",
-            "run_carrier_specialist": "delegated",
-            "run_remote_specialist": "delegated",
-        },
-        tool_direct_input_modes={"lookup_customer": "protect"},
-    ).middleware()
+    tools = [
+        _set_tool_policy(lookup_customer, tool_type="direct", input_mode="protect"),
+        _set_tool_policy(list_recent_orders, tool_type="direct", input_mode="resolve"),
+        _set_tool_policy(get_order_details, tool_type="direct", input_mode="resolve"),
+        _set_tool_policy(get_shipping_status, tool_type="direct", input_mode="resolve"),
+        _set_tool_policy(get_carrier_contact, tool_type="direct", input_mode="resolve"),
+        _set_tool_policy(request_eta, tool_type="direct", input_mode="resolve"),
+        _set_tool_policy(run_carrier_specialist, tool_type="delegated"),
+        _set_tool_policy(run_remote_specialist, tool_type="delegated"),
+    ]
+    middleware = DymiumMiddleware(sanitizer, tools=tools).middleware()
 
     agent = create_agent(
         model=model,
-        tools=[
-            lookup_customer,
-            list_recent_orders,
-            get_order_details,
-            get_shipping_status,
-            get_carrier_contact,
-            request_eta,
-            run_carrier_specialist,
-            run_remote_specialist,
-        ],
+        tools=tools,
         middleware=[middleware],
     )
 

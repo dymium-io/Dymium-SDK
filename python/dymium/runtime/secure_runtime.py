@@ -16,8 +16,9 @@ from dymium.delegation.transport import (
 from dymium.types import ChatRequest
 from dymium.adapters.tools import CombinedToolAdapter, LocalToolAdapter
 from dymium.tools import (
+    TOOL_TYPE_DIRECT,
     TOOL_TYPE_DELEGATED,
-    normalize_direct_input_mode,
+    normalize_input_mode,
     normalize_tool_type,
     should_resolve_tool_inputs,
 )
@@ -60,19 +61,8 @@ class SecureRuntime(AgentRuntime):
     def __init__(
         self,
         components: RuntimeComponents,
-        *,
-        tool_types: Dict[str, str] | None = None,
-        tool_direct_input_modes: Dict[str, str] | None = None,
     ) -> None:
         self.components = components
-        self._tool_types = {
-            str(k): normalize_tool_type(v)
-            for k, v in (tool_types or {}).items()
-        }
-        self._tool_direct_input_modes = {
-            str(k): normalize_direct_input_mode(v)
-            for k, v in (tool_direct_input_modes or {}).items()
-        }
 
     @classmethod
     def from_config(cls, config: RuntimeConfig) -> "SecureRuntime":
@@ -84,11 +74,7 @@ class SecureRuntime(AgentRuntime):
         tools = cls._build_tools(config)
         redaction = RedactionEngine()
         components = RuntimeComponents(llm=llm, pii=pii, redaction=redaction, tools=tools)
-        return cls(
-            components,
-            tool_types=config.tool_types,
-            tool_direct_input_modes=config.tool_direct_input_modes,
-        )
+        return cls(components)
 
     def run(self, request: ChatRequest | Dict[str, Any]) -> Dict[str, Any]:
         if hasattr(request, "model_dump"):
@@ -127,8 +113,7 @@ class SecureRuntime(AgentRuntime):
             max_steps = 3
         tool_results = []
         tool_defs = list(self.components.tools.list_tools() or [])
-        tool_types = self._tool_types_by_name(tool_defs)
-        tool_direct_input_modes = self._tool_direct_input_modes_by_name(tool_defs)
+        tool_types, tool_input_modes = self._extract_tool_policies(tool_defs)
         for _ in range(max_steps):
             llm_request: Dict[str, Any] = {"messages": messages}
             if tool_defs:
@@ -179,8 +164,8 @@ class SecureRuntime(AgentRuntime):
 
             for tc in tool_calls:
                 tool_type = normalize_tool_type(tool_types.get(tc.get("name")))
-                direct_input_mode = normalize_direct_input_mode(
-                    tool_direct_input_modes.get(tc.get("name"))
+                input_mode = normalize_input_mode(
+                    tool_input_modes.get(tc.get("name"))
                 )
                 if self._contains_placeholders(tc.get("arguments"), placeholder_map):
                     tool_inputs_protected = True
@@ -188,7 +173,7 @@ class SecureRuntime(AgentRuntime):
                     tc,
                     placeholder_map,
                     tool_type=tool_type,
-                    direct_input_mode=direct_input_mode,
+                    input_mode=input_mode,
                 )
                 agentic_ctx: Dict[str, Any] | None = None
                 if tool_type == TOOL_TYPE_DELEGATED:
@@ -402,11 +387,11 @@ class SecureRuntime(AgentRuntime):
         placeholder_map: Dict[str, str],
         *,
         tool_type: str | None = None,
-        direct_input_mode: str | None = None,
+        input_mode: str | None = None,
     ) -> Dict[str, Any]:
         if not should_resolve_tool_inputs(
             tool_type=normalize_tool_type(tool_type),
-            direct_input_mode=normalize_direct_input_mode(direct_input_mode),
+            input_mode=normalize_input_mode(input_mode),
         ):
             return dict(tool_call)
         resolved = dict(tool_call)
@@ -480,31 +465,36 @@ class SecureRuntime(AgentRuntime):
             return GLOBAL_REGISTRY.create("tools", "mcp_multi", {"servers": list(mcp_config)})
         raise ValueError("RuntimeConfig.mcp must be a dict or list of dicts")
 
-    def _tool_types_by_name(self, tool_defs: Iterable[Dict[str, Any]]) -> Dict[str, str]:
-        out: Dict[str, str] = {}
+    @staticmethod
+    def _extract_tool_policies(tool_defs: Iterable[Dict[str, Any]]) -> tuple[Dict[str, str], Dict[str, str]]:
+        tool_types: Dict[str, str] = {}
+        input_modes: Dict[str, str] = {}
         for tool in tool_defs:
             if not isinstance(tool, dict):
                 continue
             name = tool.get("name")
-            if not name:
-                continue
-            out[str(name)] = normalize_tool_type(tool.get("tool_type"))
-        out.update(self._tool_types)
-        return out
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError("Every tool must have a name and explicit policy.")
+            tool_name = name.strip()
 
-    def _tool_direct_input_modes_by_name(self, tool_defs: Iterable[Dict[str, Any]]) -> Dict[str, str]:
-        out: Dict[str, str] = {}
-        for tool in tool_defs:
-            if not isinstance(tool, dict):
-                continue
-            name = tool.get("name")
-            if not name:
-                continue
-            out[str(name)] = normalize_direct_input_mode(
-                tool.get("direct_input_mode") or tool.get("directInputMode")
-            )
-        out.update(self._tool_direct_input_modes)
-        return out
+            raw_tool_type = tool.get("tool_type")
+            if raw_tool_type is None:
+                raise ValueError(
+                    f"Tool {tool_name!r} is missing tool_type. "
+                    "Set tool_type to 'direct' or 'delegated'."
+                )
+            tool_type = normalize_tool_type(raw_tool_type)
+            tool_types[tool_name] = tool_type
+
+            raw_mode = tool.get("input_mode")
+            if tool_type == TOOL_TYPE_DIRECT and raw_mode is None:
+                raise ValueError(
+                    f"Tool {tool_name!r} is direct but missing input_mode. "
+                    "Set input_mode to 'protect' or 'resolve'."
+                )
+            if raw_mode is not None:
+                input_modes[tool_name] = normalize_input_mode(raw_mode)
+        return tool_types, input_modes
 
     @classmethod
     def _extract_agentic_metadata_from_tool_result(

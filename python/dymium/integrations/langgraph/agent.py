@@ -5,6 +5,7 @@ from typing import Any, AsyncIterable, Dict, Iterable, Sequence
 
 from dymium.runtime.secure_runtime import DEFAULT_SYSTEM_PROMPT
 from dymium.sanitization import Sanitizer
+from dymium.integrations.tool_policy import extract_tool_policies
 
 from .state import DymiumMessagesState, sanitize_state_messages, deobfuscate_state_messages
 
@@ -74,8 +75,6 @@ def create_sanitized_agent(
     messages_key: str = "messages",
     state_schema: Any = DymiumMessagesState,
     max_tool_calls: int | None = None,
-    tool_types: Dict[str, str] | None = None,
-    tool_direct_input_modes: Dict[str, str] | None = None,
 ):
     """Create a compiled LangGraph app with sanitized model and tool boundaries."""
     try:
@@ -84,15 +83,18 @@ def create_sanitized_agent(
     except Exception as exc:  # pragma: no cover
         raise RuntimeError("LangGraph is not installed. Install with: pip install langgraph") from exc
 
+    tool_list = list(tools)
+    tool_types, tool_input_modes = extract_tool_policies(tool_list)
+
     if hasattr(model, "bind_tools"):
-        model = model.bind_tools(list(tools))
+        model = model.bind_tools(tool_list)
 
     tools_node = make_tool_node(
-        tools,
+        tool_list,
         sanitizer,
         messages_key=messages_key,
         tool_types=tool_types,
-        tool_direct_input_modes=tool_direct_input_modes,
+        tool_input_modes=tool_input_modes,
     )
 
     def model_node(state: Dict[str, Any]) -> Dict[str, Any]:

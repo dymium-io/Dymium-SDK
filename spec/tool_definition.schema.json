@@ -4,7 +4,7 @@
   "title": "ToolDefinition",
   "type": "object",
   "additionalProperties": false,
-  "required": ["name"],
+  "required": ["name", "tool_type"],
   "properties": {
     "name": { "type": "string" },
     "description": { "type": "string" },
@@ -16,12 +16,12 @@
     "tool_type": {
       "type": "string",
       "enum": ["direct", "delegated"],
-      "description": "Tool execution mode. direct resolves placeholders before call by default; delegated receives placeholders and manages nested tool resolution itself."
+      "description": "Tool execution mode. direct resolves placeholders at execution according to input_mode; delegated receives placeholders and manages nested tool resolution itself."
     },
-    "direct_input_mode": {
+    "input_mode": {
       "type": "string",
       "enum": ["resolve", "protect"],
-      "description": "Direct-tool input handling. resolve (default) materializes originals at execution; protect keeps placeholders in direct tool args. Ignored for delegated tools."
+      "description": "Direct-tool input handling. resolve materializes originals at execution; protect keeps placeholders in direct tool args. Ignored for delegated tools."
     },
     "delegated_transport": {
       "description": "Delegated remote transport. If set on a local delegated tool with no handler, runtime performs an automatic delegated handoff and propagates Dymium context.",
@@ -53,5 +53,18 @@
         }
       ]
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "tool_type": { "const": "direct" }
+        },
+        "required": ["tool_type"]
+      },
+      "then": {
+        "required": ["input_mode"]
+      }
+    }
+  ]
 }
