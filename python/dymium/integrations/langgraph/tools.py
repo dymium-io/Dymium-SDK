@@ -10,6 +10,8 @@ from dymium.delegation.transport import (
     RUNTIME_CONTEXT_ID_KEY,
     RUNTIME_CONTEXT_MARKER_KEY,
     RUNTIME_CONTEXT_MARKER_VALUE,
+    pop_runtime_context,
+    push_runtime_context,
 )
 from dymium.tools import TOOL_TYPE_DELEGATED, normalize_input_mode, normalize_tool_type
 
@@ -20,6 +22,7 @@ def make_tool_call_wrapper(
     messages_key: str = "messages",
     tool_types: Dict[str, str] | None = None,
     tool_input_modes: Dict[str, str] | None = None,
+    tool_uses_transport_handler: Dict[str, bool] | None = None,
 ) -> Callable[[Any, Callable[[Any], Any]], Any]:
     normalized_tool_types = {
         str(k): normalize_tool_type(v)
@@ -28,6 +31,10 @@ def make_tool_call_wrapper(
     normalized_input_modes = {
         str(k): normalize_input_mode(v)
         for k, v in (tool_input_modes or {}).items()
+    }
+    normalized_transport_handler_flags = {
+        str(k): bool(v)
+        for k, v in (tool_uses_transport_handler or {}).items()
     }
 
     def wrap_tool_call(request: Any, handler: Callable[[Any], Any]) -> Any:
@@ -44,6 +51,9 @@ def make_tool_call_wrapper(
         tool_type = normalize_tool_type(normalized_tool_types.get(tool_name))
         input_mode = normalize_input_mode(
             normalized_input_modes.get(tool_name)
+        )
+        uses_transport_handler = bool(
+            normalized_transport_handler_flags.get(str(tool_name), False)
         )
 
         sanitizer.record_tool_call(tool_name, ctx)
@@ -67,7 +77,9 @@ def make_tool_call_wrapper(
                 RUNTIME_CONTEXT_MARKER_KEY: RUNTIME_CONTEXT_MARKER_VALUE,
                 RUNTIME_CONTEXT_ID_KEY: uuid.uuid4().hex,
             }
-            resolved_args["dymium_context"] = agentic_ctx
+            if uses_transport_handler:
+                # Transport handlers consume context internally and keep tool signatures clean.
+                resolved_args["dymium_context"] = agentic_ctx
         tool_call = dict(tool_call)
         tool_call["args"] = resolved_args
         if tool_type == TOOL_TYPE_DELEGATED and isinstance(agentic_ctx, dict):
@@ -76,7 +88,14 @@ def make_tool_call_wrapper(
         if hasattr(request, "override"):
             request = request.override(tool_call=tool_call)
 
-        result = handler(request)
+        transport_token = None
+        if tool_type == TOOL_TYPE_DELEGATED and isinstance(agentic_ctx, dict):
+            transport_token = push_runtime_context(agentic_ctx)
+        try:
+            result = handler(request)
+        finally:
+            if transport_token is not None:
+                pop_runtime_context(transport_token)
         if tool_type == TOOL_TYPE_DELEGATED and isinstance(agentic_ctx, dict):
             child_map = _normalize_placeholder_map(agentic_ctx.get("placeholder_map"))
             if child_map:
@@ -121,8 +140,59 @@ def make_tool_node(
         messages_key=messages_key,
         tool_types=tool_types,
         tool_input_modes=tool_input_modes,
+        tool_uses_transport_handler=_build_tool_transport_handler_map(tools),
     )
     return ToolNode(tools, messages_key=messages_key, wrap_tool_call=wrap, **kwargs)
+
+
+def _build_tool_transport_handler_map(tools: Sequence[Any]) -> Dict[str, bool]:
+    out: Dict[str, bool] = {}
+    for tool in tools:
+        name = _tool_object_name(tool)
+        if not isinstance(name, str) or not name.strip():
+            continue
+        out[name.strip()] = _tool_has_transport_handler(tool)
+    return out
+
+
+def _tool_object_name(tool: Any) -> str | None:
+    if isinstance(tool, dict):
+        name = tool.get("name")
+        return str(name) if isinstance(name, str) and name.strip() else None
+    name = getattr(tool, "name", None)
+    return str(name) if isinstance(name, str) and name.strip() else None
+
+
+def _tool_has_transport_handler(tool: Any) -> bool:
+    seen: set[int] = set()
+    for fn in _tool_candidate_callables(tool):
+        fn_id = id(fn)
+        if fn_id in seen:
+            continue
+        seen.add(fn_id)
+        if bool(getattr(fn, "__dymium_context_from_transport__", False)):
+            return True
+    return False
+
+
+def _tool_candidate_callables(tool: Any) -> list[Callable[..., Any]]:
+    out: list[Callable[..., Any]] = []
+    if isinstance(tool, dict):
+        for key in ("handler", "callable", "fn", "func", "coroutine"):
+            fn = tool.get(key)
+            if callable(fn):
+                out.append(fn)
+        return out
+    for attr in ("func", "coroutine", "_run", "run"):
+        fn = getattr(tool, attr, None)
+        if callable(fn):
+            out.append(fn)
+    if callable(tool):
+        out.append(tool)
+    invoke = getattr(tool, "invoke", None)
+    if callable(invoke):
+        out.append(invoke)
+    return out
 
 
 def _tool_result_payload(result: Any) -> Any:

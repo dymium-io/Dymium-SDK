@@ -1,6 +1,6 @@
 """Adapter registry and factories.
 
-Adapters register under simple string keys (e.g., "openai", "presidio").
+Adapters register under simple string keys (e.g., "openai", "dymium_hf").
 This keeps the public API clean and allows plugin-style extension later.
 """
 from __future__ import annotations
@@ -49,7 +49,6 @@ def register_default_adapters() -> None:
     from dymium.adapters.llm import OpenAIAdapter, GhostLLMAdapter, AnthropicAdapter, GeminiAdapter
     from dymium.adapters.pii import (
         GhostPIIDetector,
-        PresidioDetector,
         ComprehendDetector,
         GoogleDLPDetector,
         AzurePIIDetector,
@@ -118,19 +117,6 @@ def register_default_adapters() -> None:
     )
 
     GLOBAL_REGISTRY.register(
-        name="presidio",
-        kind="pii",
-        factory=lambda cfg: PresidioDetector(
-            base_url=cfg["base_url"],
-            timeout_s=cfg.get("timeout_s", 10),
-            language=cfg.get("language", "en"),
-            entities=cfg.get("entities"),
-            score_threshold=cfg.get("score_threshold"),
-            regex_rules=cfg.get("regex_rules") or cfg.get("regexRules"),
-        ),
-    )
-
-    GLOBAL_REGISTRY.register(
         name="comprehend",
         kind="pii",
         factory=lambda cfg: ComprehendDetector(
@@ -184,7 +170,6 @@ def register_default_adapters() -> None:
         kind="pii",
         factory=lambda cfg: HuggingFacePIIDetector(
             model_id=cfg.get("model_id", "dymium/Dymium-NER-v1"),
-            aggregation_strategy=cfg.get("aggregation_strategy", "simple"),
             score_threshold=cfg.get("score_threshold"),
             device=cfg.get("device"),
             tokenizer=cfg.get("tokenizer"),
@@ -198,7 +183,6 @@ def register_default_adapters() -> None:
         kind="pii",
         factory=lambda cfg: HuggingFacePIIDetector(
             model_id=cfg.get("model_id", "dymium/Dymium-NER-v1"),
-            aggregation_strategy=cfg.get("aggregation_strategy", "simple"),
             score_threshold=cfg.get("score_threshold"),
             device=cfg.get("device"),
             tokenizer=cfg.get("tokenizer"),

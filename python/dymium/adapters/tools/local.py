@@ -1,10 +1,10 @@
 """Local tool adapter (callable-based tools)."""
 from __future__ import annotations
 
-import inspect
 from typing import Any, Callable, Dict, Iterable, List
 
 from dymium.delegation import DelegatedTransport
+from dymium.delegation.transport import pop_runtime_context, push_runtime_context
 from dymium.tools import (
     TOOL_TYPE_DIRECT,
     TOOL_TYPE_DELEGATED,
@@ -132,28 +132,17 @@ class LocalToolAdapter:
         if not isinstance(args, dict):
             return handler(args)
         call_args = dict(args)
-        if (
-            normalize_tool_type(tool_type) == TOOL_TYPE_DELEGATED
-            and "dymium_context" not in call_args
-            and LocalToolAdapter._accepts_named_arg(handler, "dymium_context")
-        ):
+        runtime_token = None
+        if normalize_tool_type(tool_type) == TOOL_TYPE_DELEGATED:
+            # Runtime-owned context only: never forward dymium_context as tool input.
+            call_args.pop("dymium_context", None)
             dymium_context = context.get("dymium_context")
             if isinstance(dymium_context, dict):
-                call_args["dymium_context"] = dymium_context
-        return handler(**call_args)
-
-    @staticmethod
-    def _accepts_named_arg(handler: Callable[..., Any], name: str) -> bool:
+                runtime_token = push_runtime_context(dymium_context)
+                if bool(getattr(handler, "__dymium_context_from_transport__", False)):
+                    call_args["dymium_context"] = dymium_context
         try:
-            params = inspect.signature(handler).parameters.values()
-        except Exception:
-            return False
-        for param in params:
-            if param.kind == inspect.Parameter.VAR_KEYWORD:
-                return True
-            if param.name == name and param.kind in (
-                inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                inspect.Parameter.KEYWORD_ONLY,
-            ):
-                return True
-        return False
+            return handler(**call_args)
+        finally:
+            if runtime_token is not None:
+                pop_runtime_context(runtime_token)

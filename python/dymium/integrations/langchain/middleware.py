@@ -23,6 +23,8 @@ from dymium.delegation.transport import (
     RUNTIME_CONTEXT_ID_KEY,
     RUNTIME_CONTEXT_MARKER_KEY,
     RUNTIME_CONTEXT_MARKER_VALUE,
+    pop_runtime_context,
+    push_runtime_context,
 )
 from dymium.tools import TOOL_TYPE_DELEGATED, normalize_input_mode, normalize_tool_type
 from dymium.integrations.tool_policy import extract_tool_policies
@@ -134,7 +136,9 @@ class DymiumMiddleware:  # runtime import of AgentMiddleware below
     ) -> None:
         self.sanitizer = sanitizer
         self.system_prompt = system_prompt
-        self.tool_types, self.tool_input_modes = extract_tool_policies(tools)
+        tool_list = list(tools)
+        self.tool_types, self.tool_input_modes = extract_tool_policies(tool_list)
+        self.tool_uses_transport_handler = _build_tool_transport_handler_map(tool_list)
         self.trace_hook = trace_hook
 
         # Late import to keep langchain optional
@@ -242,6 +246,7 @@ class DymiumMiddleware:  # runtime import of AgentMiddleware below
         tool_name = _extract_tool_name(tool_call)
         tool_type = normalize_tool_type(self.tool_types.get(tool_name))
         input_mode = normalize_input_mode(self.tool_input_modes.get(tool_name))
+        uses_transport_handler = bool(self.tool_uses_transport_handler.get(tool_name))
         tool_args = _extract_tool_args(tool_call)
 
         self.sanitizer.record_tool_call(tool_name, ctx)
@@ -262,7 +267,9 @@ class DymiumMiddleware:  # runtime import of AgentMiddleware below
                 RUNTIME_CONTEXT_MARKER_KEY: RUNTIME_CONTEXT_MARKER_VALUE,
                 RUNTIME_CONTEXT_ID_KEY: uuid.uuid4().hex,
             }
-            resolved_args["dymium_context"] = agentic_ctx
+            if uses_transport_handler:
+                # Transport handlers consume context internally and keep tool signatures clean.
+                resolved_args["dymium_context"] = agentic_ctx
         tool_call = dict(tool_call)
         tool_call["args"] = resolved_args
         tool_call["arguments"] = resolved_args
@@ -282,11 +289,15 @@ class DymiumMiddleware:  # runtime import of AgentMiddleware below
 
         request = _update_request_tool_call(request, tool_call)
         ambient_token: contextvars.Token | None = None
+        transport_token: contextvars.Token | None = None
         if tool_type == TOOL_TYPE_DELEGATED and isinstance(agentic_ctx, dict):
             ambient_token = _push_agentic_context(agentic_ctx)
+            transport_token = push_runtime_context(agentic_ctx)
         try:
             result = handler(request)
         finally:
+            if transport_token is not None:
+                pop_runtime_context(transport_token)
             if ambient_token is not None:
                 ambient_after = _peek_agentic_context()
                 if isinstance(ambient_after, dict) and isinstance(agentic_ctx, dict):
@@ -496,6 +507,58 @@ def _deobfuscate_content(content: Any, sanitizer: Sanitizer, ctx: SanitizationCo
             out.append(part)
         return out
     return content
+
+
+def _build_tool_transport_handler_map(tools: Iterable[Any]) -> Dict[str, bool]:
+    out: Dict[str, bool] = {}
+    for tool in tools:
+        name = _tool_object_name(tool)
+        if not isinstance(name, str) or not name.strip():
+            continue
+        out[name.strip()] = _tool_has_transport_handler(tool)
+    return out
+
+
+def _tool_object_name(tool: Any) -> str | None:
+    if isinstance(tool, dict):
+        name = tool.get("name")
+        return str(name) if isinstance(name, str) and name.strip() else None
+    name = getattr(tool, "name", None)
+    return str(name) if isinstance(name, str) and name.strip() else None
+
+
+def _tool_has_transport_handler(tool: Any) -> bool:
+    seen: set[int] = set()
+    for fn in _tool_candidate_callables(tool):
+        fn_id = id(fn)
+        if fn_id in seen:
+            continue
+        seen.add(fn_id)
+        if bool(getattr(fn, "__dymium_context_from_transport__", False)):
+            return True
+    return False
+
+
+def _tool_candidate_callables(tool: Any) -> List[Callable[..., Any]]:
+    out: List[Callable[..., Any]] = []
+
+    if isinstance(tool, dict):
+        for key in ("handler", "callable", "fn", "func", "coroutine"):
+            fn = tool.get(key)
+            if callable(fn):
+                out.append(fn)
+        return out
+
+    for attr in ("func", "coroutine", "_run", "run"):
+        fn = getattr(tool, attr, None)
+        if callable(fn):
+            out.append(fn)
+    if callable(tool):
+        out.append(tool)
+    invoke = getattr(tool, "invoke", None)
+    if callable(invoke):
+        out.append(invoke)
+    return out
 
 
 def _extract_tool_name(tool_call: Any) -> str | None:

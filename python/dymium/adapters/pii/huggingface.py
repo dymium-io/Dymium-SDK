@@ -13,7 +13,6 @@ class HuggingFacePIIDetector:
     def __init__(
         self,
         model_id: str = "dymium/Dymium-NER-v1",
-        aggregation_strategy: str = "simple",
         score_threshold: float | None = None,
         device: int | str | None = None,
         tokenizer: str | None = None,
@@ -21,7 +20,6 @@ class HuggingFacePIIDetector:
         regex_rules: Optional[list[Dict[str, Any]]] = None,
     ) -> None:
         self.model_id = model_id
-        self.aggregation_strategy = aggregation_strategy
         self.score_threshold = score_threshold
         self.device = device
         self.tokenizer = tokenizer
@@ -83,7 +81,8 @@ class HuggingFacePIIDetector:
         kwargs: Dict[str, Any] = {
             "task": "token-classification",
             "model": self.model_id,
-            "aggregation_strategy": self.aggregation_strategy,
+            # We currently standardize entity grouping behavior across the SDK.
+            "aggregation_strategy": "simple",
         }
         if self.tokenizer:
             kwargs["tokenizer"] = self.tokenizer
@@ -129,4 +128,3 @@ def _as_float(value: Any) -> float | None:
         return float(str(value))
     except Exception:
         return None
-

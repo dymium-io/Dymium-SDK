@@ -11,6 +11,8 @@ from dymium.delegation.transport import (
     RUNTIME_CONTEXT_ID_KEY,
     RUNTIME_CONTEXT_MARKER_KEY,
     RUNTIME_CONTEXT_MARKER_VALUE,
+    pop_runtime_context,
+    push_runtime_context,
 )
 from dymium.tools import TOOL_TYPE_DELEGATED, normalize_input_mode, normalize_tool_type
 
@@ -40,7 +42,14 @@ def wrap_tool_callable(
             tool_type=normalized_tool_type,
             input_mode=normalized_input_mode,
         )
-        result = func(*resolved_args, **resolved_kwargs)
+        transport_token = None
+        if normalized_tool_type == TOOL_TYPE_DELEGATED and isinstance(agentic_ctx, dict):
+            transport_token = push_runtime_context(agentic_ctx)
+        try:
+            result = func(*resolved_args, **resolved_kwargs)
+        finally:
+            if transport_token is not None:
+                pop_runtime_context(transport_token)
         if normalized_tool_type == TOOL_TYPE_DELEGATED and isinstance(agentic_ctx, dict):
             _merge_agentic_context(ctx, agentic_ctx, parent_tool=name)
         return sanitizer.sanitize_tool_output(
@@ -147,7 +156,14 @@ class _ToolProxy:
             tool_type=self._tool_type,
             input_mode=self._input_mode,
         )
-        result = self._tool(*resolved_args, **resolved_kwargs)
+        transport_token = None
+        if self._tool_type == TOOL_TYPE_DELEGATED and isinstance(agentic_ctx, dict):
+            transport_token = push_runtime_context(agentic_ctx)
+        try:
+            result = self._tool(*resolved_args, **resolved_kwargs)
+        finally:
+            if transport_token is not None:
+                pop_runtime_context(transport_token)
         if self._tool_type == TOOL_TYPE_DELEGATED and isinstance(agentic_ctx, dict):
             _merge_agentic_context(self._ctx, agentic_ctx, parent_tool=self._name)
         return self._sanitizer.sanitize_tool_output(
@@ -168,10 +184,17 @@ class _ToolProxy:
             tool_type=self._tool_type,
             input_mode=self._input_mode,
         )
-        if hasattr(self._tool, "acall"):
-            result = await self._tool.acall(*resolved_args, **resolved_kwargs)
-        else:
-            result = self._tool(*resolved_args, **resolved_kwargs)
+        transport_token = None
+        if self._tool_type == TOOL_TYPE_DELEGATED and isinstance(agentic_ctx, dict):
+            transport_token = push_runtime_context(agentic_ctx)
+        try:
+            if hasattr(self._tool, "acall"):
+                result = await self._tool.acall(*resolved_args, **resolved_kwargs)
+            else:
+                result = self._tool(*resolved_args, **resolved_kwargs)
+        finally:
+            if transport_token is not None:
+                pop_runtime_context(transport_token)
         if self._tool_type == TOOL_TYPE_DELEGATED and isinstance(agentic_ctx, dict):
             _merge_agentic_context(self._ctx, agentic_ctx, parent_tool=self._name)
         return self._sanitizer.sanitize_tool_output(
@@ -206,8 +229,11 @@ def _resolve_invocation(
         )
         if normalized_tool_type == TOOL_TYPE_DELEGATED and isinstance(resolved, dict):
             agentic_ctx = _build_agentic_context(ctx)
-            if _accepts_named_arg(func, "dymium_context"):
-                resolved = dict(resolved)
+            resolved = dict(resolved)
+            # Runtime-owned context only: never forward dymium_context as tool input.
+            resolved.pop("dymium_context", None)
+            if _is_transport_handler(func):
+                # Transport handlers consume context internally and keep tool signatures clean.
                 resolved["dymium_context"] = agentic_ctx
         bound.arguments.clear()
         bound.arguments.update(resolved)
@@ -228,10 +254,13 @@ def _resolve_invocation(
             tool_type=normalized_tool_type,
             input_mode=normalized_input_mode,
         )
-        if normalized_tool_type == TOOL_TYPE_DELEGATED and _accepts_named_arg(func, "dymium_context"):
+        if normalized_tool_type == TOOL_TYPE_DELEGATED:
             agentic_ctx = _build_agentic_context(ctx)
-            resolved_kwargs = dict(resolved_kwargs)
-            resolved_kwargs["dymium_context"] = agentic_ctx
+            if isinstance(resolved_kwargs, dict):
+                resolved_kwargs = dict(resolved_kwargs)
+                resolved_kwargs.pop("dymium_context", None)
+                if _is_transport_handler(func):
+                    resolved_kwargs["dymium_context"] = agentic_ctx
         return resolved_args, resolved_kwargs, agentic_ctx
 
 
@@ -239,18 +268,18 @@ def _has_tool_metadata(tool: Any) -> bool:
     return hasattr(tool, "metadata")
 
 
-def _accepts_named_arg(func: Callable[..., Any], name: str) -> bool:
-    try:
-        params = inspect.signature(func).parameters.values()
-    except Exception:
-        return False
-    for param in params:
-        if param.kind == inspect.Parameter.VAR_KEYWORD:
-            return True
-        if param.name == name and param.kind in (
-            inspect.Parameter.POSITIONAL_OR_KEYWORD,
-            inspect.Parameter.KEYWORD_ONLY,
-        ):
+def _is_transport_handler(func: Any) -> bool:
+    if bool(getattr(func, "__dymium_context_from_transport__", False)):
+        return True
+    if isinstance(func, dict):
+        candidates = [func.get(k) for k in ("handler", "callable", "fn", "func", "coroutine")]
+    else:
+        candidates = [
+            getattr(func, attr, None)
+            for attr in ("func", "coroutine", "_run", "run", "invoke")
+        ]
+    for candidate in candidates:
+        if callable(candidate) and bool(getattr(candidate, "__dymium_context_from_transport__", False)):
             return True
     return False
 
