@@ -2,3 +2,5 @@ __pycache__/
 .venv/
 .tmp_spec_types/
 *.egg-info/
+python/dist/
+python/build/

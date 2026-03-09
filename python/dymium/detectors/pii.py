@@ -1,7 +1,6 @@
 """PII detector re-exports for public imports."""
 
 from dymium.adapters.pii import (
-    PresidioDetector,
     GhostPIIDetector,
     ComprehendDetector,
     GoogleDLPDetector,
@@ -10,7 +9,6 @@ from dymium.adapters.pii import (
 )
 
 __all__ = [
-    "PresidioDetector",
     "GhostPIIDetector",
     "ComprehendDetector",
     "GoogleDLPDetector",

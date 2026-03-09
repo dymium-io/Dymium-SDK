@@ -2,7 +2,7 @@
 
 Dymium is a security SDK for tool-using LLM apps. It keeps sensitive values placeholderized across the model loop and only allows controlled exposure at tool boundaries.
 
-Detection happens in the sanitizer layer using your configured PII detector (for example Presidio, Comprehend, Google DLP, Azure, Ghost, or Hugging Face). Sensitive values detected in user input and tool output are replaced with placeholders and tracked in runtime context, so agents can still reason over requests and drive tool workflows that depend on sensitive fields without ever seeing the raw values.
+Detection happens in the sanitizer layer using your configured PII detector (for example Hugging Face, Comprehend, Google DLP, Azure, or GhostPII). Sensitive values detected in user input and tool output are replaced with placeholders and tracked in runtime context, so agents can still reason over requests and drive tool workflows that depend on sensitive fields without ever seeing the raw values.
 
 Each tool declares how that protected context is handled. `tool_type="direct"` is for non-agentic execution boundaries (local handlers, DB/API calls, deterministic services) and requires `input_mode`: use `resolve` when the trusted tool must receive originals at execution time, or `protect` when placeholders must remain in tool args. `tool_type="delegated"` is for agentic handoffs (sub-agents or remote secured runtimes): Dymium forwards protected input plus runtime context so the downstream secured runtime can continue safely. Tool outputs are re-sanitized before returning to the model, and the app receives deobfuscated output with a security summary.
 
@@ -19,14 +19,13 @@ pip install dymium
 ---
 
 ## Supported Detectors (PII)
-- `PresidioDetector` (external HTTP service)
+- `HuggingFacePIIDetector` (local Transformers; Dymium flagship model)
 - `ComprehendDetector` (AWS)
 - `GoogleDLPDetector` (Google Cloud)
 - `AzurePIIDetector` (Azure)
 - `GhostPIIDetector` (Dymium Detect)
   - Dymium Detect (cloud API)
   - Dymium Detector (local) via `HuggingFacePIIDetector`
-- `HuggingFacePIIDetector` (local Transformers; optional deps)
 - Optional `regex_rules` (configured with the detector) to supplement the selected detector
 
 Configure detectors via `RuntimeConfig(pii="...", pii_config={...})` or by directly instantiating `Sanitizer`.
@@ -37,12 +36,10 @@ Configure detectors via `RuntimeConfig(pii="...", pii_config={...})` or by direc
 
 ```python
 from dymium.sanitization import Sanitizer, SanitizationContext
-from dymium.detectors.pii import PresidioDetector
-from dymium.redaction import RedactionEngine
+from dymium.detectors.pii import HuggingFacePIIDetector
 
 sanitizer = Sanitizer(
-    pii=PresidioDetector(base_url="https://pii.example.internal"),
-    redaction=RedactionEngine(),
+    pii=HuggingFacePIIDetector(model_id="dymium/Dymium-NER-v1"),
 )
 ctx = SanitizationContext()
 
@@ -51,6 +48,8 @@ resolved = sanitizer.resolve_for_tool({"email": "PH_EMAIL_ABCDE"}, ctx)
 safe_output = sanitizer.sanitize_tool_output({"email": "alice@example.com"}, ctx)
 final_text = sanitizer.deobfuscate("Email sent to PH_EMAIL_ABCDE", ctx)
 ```
+
+`Sanitizer` uses the built-in `RedactionEngine` by default; pass a custom redaction engine only when you need custom placeholder behavior.
 
 ---
 
@@ -80,18 +79,18 @@ This behavior is supported in `SecureRuntime`, `LangChain`, `LangGraph`, and `Ll
 - Framework integrations: set policy on each tool object via
   `tool.metadata["dymium"]["tool_type"]` and `tool.metadata["dymium"]["input_mode"]` (required for direct tools).
 
-For `delegated` tools, Dymium passes `dymium_context` with:
+For `delegated` tools, Dymium manages `dymium_context` internally with:
 - `placeholder_map`
 - runtime context metadata (`__dymium_runtime_context`, `__dymium_runtime_context_id`)
 
-Child runtimes can return updated `placeholder_map` and `security_summary` in
-`dymium_context`; Dymium merges those back into the parent flow.
+Child runtimes return updated `placeholder_map` and `security_summary` in
+response `dymium_context`; Dymium validates and merges those back into the parent flow.
 
 Delegated handoffs use transport-managed delegation (`delegated_transport` / `DelegatedTransport`).
 Delegated context is runtime-managed by Dymium.
 
 For `SecureRuntime`, remote delegated handoffs can be automatic by defining a local delegated
-tool with `delegated_transport` (no custom handler required). Dymium forwards `dymium_context`,
+tool with `delegated_transport` (no custom handler required). Dymium forwards runtime context,
 including `placeholderMap`.
 
 To include remote agents in the same security plane, the remote target must also run Dymium
@@ -101,9 +100,9 @@ middleware/sanitization). Transport alone is not sufficient if the remote runtim
 ```python
 config = RuntimeConfig(
     model="openai:gpt-5",
-    pii="presidio",
+    pii="dymium_hf",
     model_config={"api_key": "..."},
-    pii_config={"base_url": "http://localhost:5000"},
+    pii_config={"model_id": "dymium/Dymium-NER-v1"},
     tools=[
         {
             "name": "run_specialist",
@@ -136,11 +135,8 @@ remote = DelegatedTransport(
     name="run_specialist",
 )
 
-def run_specialist(handoff_request: str, customer_email: str, dymium_context: dict | None = None) -> dict:
-    return remote.invoke(
-        {"handoff_request": handoff_request, "customer_email": customer_email},
-        dymium_context=dymium_context,
-    )
+# Tool args stay business-only; context injection is runtime-owned.
+run_specialist = remote.as_tool_handler()
 ```
 
 ---
@@ -150,13 +146,11 @@ def run_specialist(handoff_request: str, customer_email: str, dymium_context: di
 ```python
 from dymium.integrations.langchain import DymiumMiddleware
 from dymium.sanitization import Sanitizer
-from dymium.redaction import RedactionEngine
-from dymium.detectors.pii import PresidioDetector
+from dymium.detectors.pii import HuggingFacePIIDetector
 from langchain.agents import create_agent
 
 sanitizer = Sanitizer(
-    pii=PresidioDetector(base_url="https://pii.example.internal"),
-    redaction=RedactionEngine(),
+    pii=HuggingFacePIIDetector(model_id="dymium/Dymium-NER-v1"),
 )
 
 tools = [...]  # Define tool objects first.
@@ -196,13 +190,11 @@ from dymium.integrations.langgraph import (
     DymiumMessagesState,
 )
 from dymium.sanitization import Sanitizer
-from dymium.redaction import RedactionEngine
-from dymium.detectors.pii import PresidioDetector
+from dymium.detectors.pii import HuggingFacePIIDetector
 from langchain.chat_models import init_chat_model
 
 sanitizer = Sanitizer(
-    pii=PresidioDetector(base_url="https://pii.example.internal"),
-    redaction=RedactionEngine(),
+    pii=HuggingFacePIIDetector(model_id="dymium/Dymium-NER-v1"),
 )
 
 model = init_chat_model("openai:gpt-5")
@@ -243,13 +235,11 @@ import asyncio
 
 from dymium.integrations.llamaindex import create_sanitized_agent_workflow
 from dymium.sanitization import Sanitizer, SanitizationContext
-from dymium.detectors.pii import PresidioDetector
-from dymium.redaction import RedactionEngine
+from dymium.detectors.pii import HuggingFacePIIDetector
 from llama_index.llms.openai import OpenAI as LlamaOpenAI
 
 sanitizer = Sanitizer(
-    pii=PresidioDetector(base_url="https://pii.example.internal"),
-    redaction=RedactionEngine(),
+    pii=HuggingFacePIIDetector(model_id="dymium/Dymium-NER-v1"),
 )
 ctx = SanitizationContext()
 
@@ -310,7 +300,7 @@ def lookup_customer(email: str) -> dict:
 
 config = RuntimeConfig(
     model="openai:gpt-5",
-    pii="presidio",
+    pii="dymium_hf",
     model_config={"api_key": "..."},
     pii_config={
         "base_url": "https://pii.example.internal",
@@ -358,22 +348,20 @@ print(result.get("security_summary"))
 ## Detector Configuration (Sanitization Module / Integrations)
 
 Use detector instances directly in `Sanitizer(...)` for framework integrations and custom loops.
-For brevity, non-Presidio snippets reuse `Sanitizer` and `RedactionEngine` imports from the Presidio example.
+For brevity, non-Hugging Face snippets reuse `Sanitizer` imports from the Hugging Face example.
 
-### Presidio
+### Hugging Face (Dymium flagship)
 
 ```python
 from dymium.sanitization import Sanitizer
-from dymium.redaction import RedactionEngine
-from dymium.detectors.pii import PresidioDetector
+from dymium.detectors.pii import HuggingFacePIIDetector
 
 sanitizer = Sanitizer(
-    pii=PresidioDetector(
-        base_url="https://pii.example.internal",
-        timeout_s=10,
+    pii=HuggingFacePIIDetector(
+        model_id="dymium/Dymium-NER-v1",
+        score_threshold=0.5,
         regex_rules=[{"pattern": "ORD-\\d+", "type": "ORDER_ID"}],
     ),
-    redaction=RedactionEngine(),
 )
 ```
 
@@ -392,7 +380,6 @@ sanitizer = Sanitizer(
         entity_types=["ID_REF", "EMAIL", "URL"],  # optional allow-list; defaults to all 13
         regex_rules=[{"pattern": "ORD-\\d+", "type": "ORDER_ID"}],
     ),
-    redaction=RedactionEngine(),
 )
 ```
 
@@ -412,7 +399,6 @@ sanitizer = Sanitizer(
         endpoint_url=None,  # optional custom endpoint
         regex_rules=[{"pattern": "ORD-\\d+", "type": "ORDER_ID"}],
     ),
-    redaction=RedactionEngine(),
 )
 ```
 
@@ -433,7 +419,6 @@ sanitizer = Sanitizer(
         timeout_s=10,
         regex_rules=[{"pattern": "ORD-\\d+", "type": "ORDER_ID"}],
     ),
-    redaction=RedactionEngine(),
 )
 ```
 
@@ -452,7 +437,6 @@ sanitizer = Sanitizer(
         timeout_s=10,
         regex_rules=[{"pattern": "ORD-\\d+", "type": "ORDER_ID"}],
     ),
-    redaction=RedactionEngine(),
 )
 ```
 
@@ -469,17 +453,14 @@ Use the built-in detector directly with `Sanitizer`:
 ```python
 from dymium.detectors.pii import HuggingFacePIIDetector
 from dymium.sanitization import Sanitizer
-from dymium.redaction import RedactionEngine
 
 sanitizer = Sanitizer(
     pii=HuggingFacePIIDetector(
         model_id="dymium/Dymium-NER-v1",
-        aggregation_strategy="simple",
         score_threshold=0.5,
         # device=0,  # optional GPU index
         regex_rules=[{"pattern": "ORD-\\d+", "type": "ORDER_ID"}],
     ),
-    redaction=RedactionEngine(),
 )
 ```
 

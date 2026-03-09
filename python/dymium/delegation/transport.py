@@ -1,7 +1,9 @@
 """Delegated transport helpers for remote agent handoffs."""
 from __future__ import annotations
 
+import contextvars
 import json
+import threading
 from typing import Any, Callable, Dict
 import urllib.error
 import urllib.request
@@ -10,6 +12,52 @@ import urllib.request
 RUNTIME_CONTEXT_MARKER_KEY = "__dymium_runtime_context"
 RUNTIME_CONTEXT_MARKER_VALUE = "v1"
 RUNTIME_CONTEXT_ID_KEY = "__dymium_runtime_context_id"
+
+_RUNTIME_CONTEXT_STACK: contextvars.ContextVar[list[Dict[str, Any]] | None] = contextvars.ContextVar(
+    "dymium_delegated_runtime_context_stack",
+    default=None,
+)
+_GLOBAL_RUNTIME_CONTEXT_LOCK = threading.Lock()
+_GLOBAL_RUNTIME_CONTEXT_STACK: list[Dict[str, Any]] = []
+
+
+def push_runtime_context(ctx: Dict[str, Any]) -> tuple[contextvars.Token, Dict[str, Any]]:
+    stack = list(_RUNTIME_CONTEXT_STACK.get() or [])
+    stack.append(ctx)
+    token = _RUNTIME_CONTEXT_STACK.set(stack)
+    with _GLOBAL_RUNTIME_CONTEXT_LOCK:
+        _GLOBAL_RUNTIME_CONTEXT_STACK.append(ctx)
+    return token, ctx
+
+
+def pop_runtime_context(token: tuple[contextvars.Token, Dict[str, Any]] | contextvars.Token) -> None:
+    if isinstance(token, tuple):
+        context_token, pushed_ctx = token
+    else:
+        context_token = token
+        pushed_ctx = None
+    _RUNTIME_CONTEXT_STACK.reset(context_token)
+    with _GLOBAL_RUNTIME_CONTEXT_LOCK:
+        if not _GLOBAL_RUNTIME_CONTEXT_STACK:
+            return
+        if isinstance(pushed_ctx, dict):
+            for idx in range(len(_GLOBAL_RUNTIME_CONTEXT_STACK) - 1, -1, -1):
+                if _GLOBAL_RUNTIME_CONTEXT_STACK[idx] is pushed_ctx:
+                    _GLOBAL_RUNTIME_CONTEXT_STACK.pop(idx)
+                    return
+        _GLOBAL_RUNTIME_CONTEXT_STACK.pop()
+
+
+def peek_runtime_context() -> Dict[str, Any] | None:
+    stack = _RUNTIME_CONTEXT_STACK.get() or []
+    if not stack:
+        with _GLOBAL_RUNTIME_CONTEXT_LOCK:
+            if not _GLOBAL_RUNTIME_CONTEXT_STACK:
+                return None
+            top = _GLOBAL_RUNTIME_CONTEXT_STACK[-1]
+            return top if isinstance(top, dict) else None
+    top = stack[-1]
+    return top if isinstance(top, dict) else None
 
 
 class DelegatedTransport:
@@ -25,6 +73,8 @@ class DelegatedTransport:
             dymium_context = call_args.pop("dymium_context", None)
             return self.invoke(call_args, dymium_context=dymium_context)
 
+        # Signal integration wrappers that transport pulls runtime context internally.
+        setattr(_handler, "__dymium_context_from_transport__", True)
         return _handler
 
     def invoke(
@@ -38,6 +88,10 @@ class DelegatedTransport:
             raw_ctx = call_args.pop("dymium_context", None)
             if isinstance(raw_ctx, dict):
                 dymium_context = raw_ctx
+        if dymium_context is None:
+            ambient_ctx = peek_runtime_context()
+            if isinstance(ambient_ctx, dict):
+                dymium_context = ambient_ctx
         if isinstance(dymium_context, dict):
             marker = dymium_context.get(RUNTIME_CONTEXT_MARKER_KEY)
             if marker != RUNTIME_CONTEXT_MARKER_VALUE:

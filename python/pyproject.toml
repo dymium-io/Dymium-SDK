@@ -8,15 +8,25 @@ version = "0.0.1"
 description = "Dymium SDK for secure data and AI interactions"
 readme = "README.md"
 requires-python = ">=3.9"
+authors = [{ name = "Dymium, Inc.", email = "support@dymium.io" }]
+maintainers = [{ name = "Dymium SDK Team", email = "support@dymium.io" }]
+license = "MIT"
 keywords = ["ai", "pii", "security", "llm", "mcp"]
 classifiers = [
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
   "Operating System :: OS Independent",
 ]
+license-files = ["LICENSE"]
 dependencies = [
   "requests>=2.31.0",
   "pydantic>=2.0",
 ]
+
+[project.urls]
+Homepage = "https://www.dymium.io"
+Support = "https://support.dymium.io"
+Security = "https://support.dymium.io/hc/en-us/requests/new"
 
 [project.optional-dependencies]
 test = [

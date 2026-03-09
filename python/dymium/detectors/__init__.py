@@ -1,7 +1,6 @@
 """Detectors (PII and related)."""
 
 from .pii import (
-    PresidioDetector,
     GhostPIIDetector,
     ComprehendDetector,
     GoogleDLPDetector,
@@ -10,7 +9,6 @@ from .pii import (
 )
 
 __all__ = [
-    "PresidioDetector",
     "GhostPIIDetector",
     "ComprehendDetector",
     "GoogleDLPDetector",

@@ -8,7 +8,6 @@ Package layout:
 - `dymium/adapters/`  Provider adapters (LLM, PII, MCP)
 - `dymium/tools/`     Tool registry and execution boundaries
 - `dymium/types/`     Generated types from `sdk/spec`
-- `examples/`         Usage stubs and reference flows
 
 Hugging Face local PII detector (optional deps):
 - `dymium/adapters/pii/huggingface.py` (`HuggingFacePIIDetector`)
@@ -20,10 +19,10 @@ Hugging Face local PII detector (optional deps):
 from dymium import SecureRuntime, RuntimeConfig
 
 config = RuntimeConfig(
-    llm="openai",
-    pii="presidio",
-    llm_config={"api_key": "..."},
-    pii_config={"base_url": "http://localhost:5000"},
+    model="openai:gpt-5",
+    pii="dymium_hf",
+    model_config={"api_key": "..."},
+    pii_config={"model_id": "dymium/Dymium-NER-v1"},
     mcp={"base_url": "http://localhost:7000"},
 )
 
@@ -40,10 +39,10 @@ result = session.run("Hello! My SSN is 123-45-6789.")
 from dymium import SecureRuntime, RuntimeConfig
 
 config = RuntimeConfig(
-    llm="openai",
-    pii="presidio",
-    llm_config={"api_key": "..."},
-    pii_config={"base_url": "http://localhost:5000"},
+    model="openai:gpt-5",
+    pii="dymium_hf",
+    model_config={"api_key": "..."},
+    pii_config={"model_id": "dymium/Dymium-NER-v1"},
     mcp={
         "servers": [
             {"name": "ghost", "adapter": "mcp", "base_url": "http://ghostmcp.local", "api_key": "..."},
@@ -63,10 +62,10 @@ runtime = SecureRuntime.from_config(config)
 from dymium import SecureRuntime, RuntimeConfig
 
 runtime = SecureRuntime.from_config(RuntimeConfig(
-    llm="openai",
-    pii="presidio",
-    llm_config={"api_key": "..."},
-    pii_config={"base_url": "http://localhost:5000"},
+    model="openai:gpt-5",
+    pii="dymium_hf",
+    model_config={"api_key": "..."},
+    pii_config={"model_id": "dymium/Dymium-NER-v1"},
     mcp={"base_url": "http://localhost:7000"},
 ))
 
@@ -83,11 +82,12 @@ Every tool must declare `tool_type`.
 `direct` tools must also declare `input_mode`:
 - `resolve`: materialize originals only at execution time.
   Common `resolve` cases: identity/account lookups, order/ticket retrieval APIs,
-  and fraud/KYC checks that require real identifiers at call time.
+  and parameterized DB queries keyed by sensitive identifiers.
 - `protect`: keep placeholders in direct tool args.
 
 `delegated` tools are agentic handoffs to another runtime (sub-agent or remote agent).
-Dymium forwards protected input and runtime context to delegated runtimes instead of resolving originals.
+Unlike `direct`, delegated handoffs cross into another LLM/tool loop outside the parent loop.
+Dymium keeps inputs protected and forwards runtime context instead of resolving originals at the parent boundary.
 
 Policy location:
 - `SecureRuntime`: set `tool_type` (and `input_mode` for direct tools) on each tool definition.
@@ -104,14 +104,44 @@ on a local delegated tool (no custom handler needed). The runtime forwards
 Remote delegated targets must also run Dymium security (another `SecureRuntime` instance or
 an integration path using Dymium sanitizer/middleware) to stay in the same security plane.
 
-For integration-managed tools (LangChain/LangGraph/LlamaIndex), use `DelegatedTransport`
-inside delegated tool handlers and pass `dymium_context` to `invoke(...)`.
+For integration-managed tools (LangChain/LangGraph/LlamaIndex), use `DelegatedTransport`.
+Keep tool signatures business-only; Dymium owns delegated context propagation internally.
+`DelegatedTransport.as_tool_handler()` is the simplest path for remote delegated calls without manual context plumbing.
 
 ## Install (local dev)
 
 From `SDK/python`:
 ```
 pip install -e .
+```
+
+## Examples
+
+The `examples/` directory includes four runnable demos:
+
+- `examples/secure_runtime_demo.py`
+- `examples/langchain_demo.py`
+- `examples/langgraph_demo.py`
+- `examples/llamaindex_demo.py`
+
+All four examples use Dymium's Hugging Face detector with model id default:
+
+- `dymium/Dymium-NER-v1` (override with `DYMIUM_PII_MODEL`)
+
+Example focus:
+
+- `secure_runtime_demo.py`: runtime-config path with direct `protect`/`resolve` tools and a local delegated specialist tool.
+- `langchain_demo.py`: middleware integration with direct `protect`/`resolve` tools and a local delegated specialist tool.
+- `langgraph_demo.py`: graph integration with direct `protect`/`resolve` tools and a local delegated specialist tool.
+- `llamaindex_demo.py`: workflow integration with direct `protect`/`resolve` tools and a local delegated specialist tool.
+
+Run from `SDK/python`:
+
+```
+python examples/secure_runtime_demo.py
+python examples/langchain_demo.py
+python examples/langgraph_demo.py
+python examples/llamaindex_demo.py
 ```
 
 ## Publish (PyPI)

@@ -407,18 +407,16 @@ class SecureRuntime(AgentRuntime):
     ) -> tuple[Dict[str, Any], Dict[str, Any]]:
         resolved = dict(tool_call)
         args = resolved.get("arguments")
-        if not isinstance(args, dict):
-            args = {}
-        args = dict(args)
-        # Runtime-owned context only: ignore any caller/tool-supplied dymium_context.
-        args.pop("dymium_context", None)
+        if isinstance(args, dict):
+            args = dict(args)
+            # Runtime-owned context only: ignore any caller/tool-supplied dymium_context.
+            args.pop("dymium_context", None)
+            resolved["arguments"] = args
         agentic_ctx = {
             "placeholder_map": dict(placeholder_map),
             RUNTIME_CONTEXT_MARKER_KEY: RUNTIME_CONTEXT_MARKER_VALUE,
             RUNTIME_CONTEXT_ID_KEY: uuid.uuid4().hex,
         }
-        args["dymium_context"] = agentic_ctx
-        resolved["arguments"] = args
         return resolved, agentic_ctx
 
     def _resolve_obj(self, obj: Any, placeholder_map: Dict[str, str]) -> Any:
@@ -538,9 +536,9 @@ class SecureRuntime(AgentRuntime):
         *,
         expected_context: Dict[str, Any] | None = None,
     ) -> tuple[Any, Dict[str, str], Dict[str, Any] | None]:
-        cleaned, _, _ = cls._extract_agentic_metadata_from_tool_result(result)
+        cleaned, _, extracted_child_summary = cls._extract_agentic_metadata_from_tool_result(result)
         updates: Dict[str, str] = {}
-        child_summary: Dict[str, Any] | None = None
+        child_summary: Dict[str, Any] | None = extracted_child_summary
         expected_context_id = expected_context.get(RUNTIME_CONTEXT_ID_KEY) if isinstance(expected_context, dict) else None
         if not isinstance(expected_context_id, str):
             return cleaned, updates, child_summary
