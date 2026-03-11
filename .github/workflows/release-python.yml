@@ -41,26 +41,20 @@ jobs:
           fi
 
           if [[ $count -eq 0 ]]; then
-            echo "bump=none" >> "$GITHUB_OUTPUT"
+            echo "release=none" >> "$GITHUB_OUTPUT"
             echo "No release label found. Skipping release."
             exit 0
           fi
 
-          echo "bump=$bump" >> "$GITHUB_OUTPUT"
+          echo "release=$bump" >> "$GITHUB_OUTPUT"
 
       - name: Stop when no release label
-        if: steps.label.outputs.bump == 'none'
+        if: steps.label.outputs.release == 'none'
         run: echo "No release label found. Workflow exiting successfully."
 
-      - name: Setup Python
-        if: steps.label.outputs.bump != 'none'
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Bump version in python/pyproject.toml
-        if: steps.label.outputs.bump != 'none'
-        id: bump
+      - name: Read version from pyproject
+        if: steps.label.outputs.release != 'none'
+        id: version
         shell: bash
         run: |
           python - << 'PY'
@@ -68,64 +62,59 @@ jobs:
           import re
           from pathlib import Path
 
-          bump = "${{ steps.label.outputs.bump }}"
-          path = Path("python/pyproject.toml")
-          text = path.read_text()
-
-          match = re.search(r'^version\s*=\s*"(\d+)\.(\d+)\.(\d+)"\s*$', text, re.MULTILINE)
+          text = Path("python/pyproject.toml").read_text()
+          match = re.search(r'^version\s*=\s*"(\d+\.\d+\.\d+)"\s*$', text, re.MULTILINE)
           if not match:
               raise SystemExit("Could not find [project].version in python/pyproject.toml")
 
-          major, minor, patch = map(int, match.groups())
-          if bump == "major":
-              major, minor, patch = major + 1, 0, 0
-          elif bump == "minor":
-              minor, patch = minor + 1, 0
-          elif bump == "patch":
-              patch += 1
-          else:
-              raise SystemExit(f"Invalid bump type: {bump}")
-
-          new_version = f"{major}.{minor}.{patch}"
-          old_version = match.group(0)
-          new_line = f'version = "{new_version}"'
-          path.write_text(text.replace(old_version, new_line, 1))
-
+          version = match.group(1)
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
-              f.write(f"version={new_version}\n")
+              f.write(f"version={version}\n")
           PY
 
-      - name: Commit and tag release
-        if: steps.label.outputs.bump != 'none'
+      - name: Fail if tag already exists
+        if: steps.label.outputs.release != 'none'
         shell: bash
         run: |
-          version="${{ steps.bump.outputs.version }}"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add python/pyproject.toml
-          git commit -m "chore(release): v${version}"
+          version="${{ steps.version.outputs.version }}"
+          if git rev-parse "v${version}" >/dev/null 2>&1; then
+            echo "Tag v${version} already exists."
+            exit 1
+          fi
+
+      - name: Create and push release tag
+        if: steps.label.outputs.release != 'none'
+        shell: bash
+        run: |
+          version="${{ steps.version.outputs.version }}"
           git tag "v${version}"
-          git push origin HEAD:main --follow-tags
+          git push origin "v${version}"
+
+      - name: Setup Python
+        if: steps.label.outputs.release != 'none'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
       - name: Build distribution
-        if: steps.label.outputs.bump != 'none'
+        if: steps.label.outputs.release != 'none'
         run: |
           python -m pip install --upgrade pip build
           python -m build python/
 
       - name: Publish to PyPI
-        if: steps.label.outputs.bump != 'none'
+        if: steps.label.outputs.release != 'none'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
           user: __token__
           password: ${{ secrets.PYPI_API_TOKEN }}
 
-      - name: Create GitHub Release
-        if: steps.label.outputs.bump != 'none'
+      - name: Create GitHub release
+        if: steps.label.outputs.release != 'none'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.bump.outputs.version }}
-          name: v${{ steps.bump.outputs.version }}
+          tag_name: v${{ steps.version.outputs.version }}
+          name: v${{ steps.version.outputs.version }}
           body: ${{ github.event.pull_request.body }}
           generate_release_notes: true

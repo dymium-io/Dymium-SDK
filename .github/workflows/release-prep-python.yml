@@ -1,0 +1,105 @@
+name: Release Prep Python SDK
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, labeled, unlabeled]
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Determine release label
+        id: label
+        shell: bash
+        run: |
+          labels='${{ toJson(github.event.pull_request.labels.*.name) }}'
+
+          count=0
+          bump=""
+          for candidate in major minor patch; do
+            if [[ "$labels" == *"release:${candidate}"* ]]; then
+              count=$((count + 1))
+              bump="$candidate"
+            fi
+          done
+
+          if [[ $count -gt 1 ]]; then
+            echo "Multiple release labels found. Use exactly one of release:major|minor|patch."
+            exit 1
+          fi
+
+          if [[ $count -eq 0 ]]; then
+            echo "bump=none" >> "$GITHUB_OUTPUT"
+            echo "No release label found. Skipping release prep."
+            exit 0
+          fi
+
+          echo "bump=$bump" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout PR branch
+        if: steps.label.outputs.bump != 'none'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: Calculate and write next version
+        if: steps.label.outputs.bump != 'none'
+        id: version
+        shell: bash
+        run: |
+          python - << 'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          bump = "${{ steps.label.outputs.bump }}"
+          path = Path("python/pyproject.toml")
+          text = path.read_text()
+
+          match = re.search(r'^version\s*=\s*"(\d+)\.(\d+)\.(\d+)"\s*$', text, re.MULTILINE)
+          if not match:
+              raise SystemExit("Could not find [project].version in python/pyproject.toml")
+
+          major, minor, patch = map(int, match.groups())
+          if bump == "major":
+              major, minor, patch = major + 1, 0, 0
+          elif bump == "minor":
+              minor, patch = minor + 1, 0
+          elif bump == "patch":
+              patch += 1
+          else:
+              raise SystemExit(f"Invalid bump type: {bump}")
+
+          new_version = f"{major}.{minor}.{patch}"
+          new_line = f'version = "{new_version}"'
+          updated = text.replace(match.group(0), new_line, 1)
+
+          changed = updated != text
+          if changed:
+              path.write_text(updated)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+              f.write(f"version={new_version}\n")
+              f.write(f"changed={'true' if changed else 'false'}\n")
+          PY
+
+      - name: Commit version bump to PR branch
+        if: steps.label.outputs.bump != 'none' && steps.version.outputs.changed == 'true'
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add python/pyproject.toml
+          git commit -m "chore(release-prep): set version v${{ steps.version.outputs.version }}"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
+
+      - name: Release prep status
+        if: steps.label.outputs.bump != 'none' && steps.version.outputs.changed != 'true'
+        run: echo "Version already matches expected bump; no commit required."
