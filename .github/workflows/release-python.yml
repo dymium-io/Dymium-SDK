@@ -64,6 +64,7 @@ jobs:
         shell: bash
         run: |
           python - << 'PY'
+          import os
           import re
           from pathlib import Path
 
@@ -90,7 +91,7 @@ jobs:
           new_line = f'version = "{new_version}"'
           path.write_text(text.replace(old_version, new_line, 1))
 
-          with open("$GITHUB_OUTPUT", "a", encoding="utf-8") as f:
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
               f.write(f"version={new_version}\n")
           PY
 
