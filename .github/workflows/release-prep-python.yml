@@ -11,6 +11,7 @@ permissions:
 
 jobs:
   prepare:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
 
     steps:
@@ -49,6 +50,10 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
 
+      - name: Fetch base branch
+        if: steps.label.outputs.bump != 'none'
+        run: git fetch origin ${{ github.event.pull_request.base.ref }} --depth=1
+
       - name: Calculate and write next version
         if: steps.label.outputs.bump != 'none'
         id: version
@@ -57,17 +62,27 @@ jobs:
           python - << 'PY'
           import os
           import re
+          import subprocess
           from pathlib import Path
 
           bump = "${{ steps.label.outputs.bump }}"
           path = Path("python/pyproject.toml")
-          text = path.read_text()
+          pr_text = path.read_text()
 
-          match = re.search(r'^version\s*=\s*"(\d+)\.(\d+)\.(\d+)"\s*$', text, re.MULTILINE)
-          if not match:
-              raise SystemExit("Could not find [project].version in python/pyproject.toml")
+          pr_match = re.search(r'^version\s*=\s*"(\d+)\.(\d+)\.(\d+)"\s*$', pr_text, re.MULTILINE)
+          if not pr_match:
+              raise SystemExit("Could not find [project].version in python/pyproject.toml on PR branch")
 
-          major, minor, patch = map(int, match.groups())
+          base_ref = "origin/${{ github.event.pull_request.base.ref }}"
+          base_text = subprocess.check_output(
+              ["git", "show", f"{base_ref}:python/pyproject.toml"],
+              text=True,
+          )
+          base_match = re.search(r'^version\s*=\s*"(\d+)\.(\d+)\.(\d+)"\s*$', base_text, re.MULTILINE)
+          if not base_match:
+              raise SystemExit("Could not find [project].version in base branch pyproject")
+
+          major, minor, patch = map(int, base_match.groups())
           if bump == "major":
               major, minor, patch = major + 1, 0, 0
           elif bump == "minor":
@@ -79,9 +94,9 @@ jobs:
 
           new_version = f"{major}.{minor}.{patch}"
           new_line = f'version = "{new_version}"'
-          updated = text.replace(match.group(0), new_line, 1)
+          updated = pr_text.replace(pr_match.group(0), new_line, 1)
 
-          changed = updated != text
+          changed = updated != pr_text
           if changed:
               path.write_text(updated)
 
