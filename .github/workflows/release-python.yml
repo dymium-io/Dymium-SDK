@@ -8,6 +8,7 @@ on:
 permissions:
   contents: write
   pull-requests: read
+  id-token: write
 
 jobs:
   release:
@@ -52,7 +53,7 @@ jobs:
         if: steps.label.outputs.release == 'none'
         run: echo "No release label found. Workflow exiting successfully."
 
-      - name: Read version from pyproject
+      - name: Compute release version
         if: steps.label.outputs.release != 'none'
         id: version
         shell: bash
@@ -60,14 +61,48 @@ jobs:
           python - << 'PY'
           import os
           import re
+          import subprocess
           from pathlib import Path
 
-          text = Path("python/pyproject.toml").read_text()
-          match = re.search(r'^version\s*=\s*"(\d+\.\d+\.\d+)"\s*$', text, re.MULTILINE)
-          if not match:
+          bump = "${{ steps.label.outputs.release }}"
+          path = Path("python/pyproject.toml")
+          text = path.read_text()
+          py_match = re.search(r'^version\s*=\s*"(\d+)\.(\d+)\.(\d+)"\s*$', text, re.MULTILINE)
+          if not py_match:
               raise SystemExit("Could not find [project].version in python/pyproject.toml")
 
-          version = match.group(1)
+          def parse(v: str):
+              m = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", v)
+              if not m:
+                  raise ValueError(f"Invalid semver: {v}")
+              return tuple(map(int, m.groups()))
+
+          pyproject_version = parse(".".join(py_match.groups()))
+          latest_tag_version = None
+          try:
+              latest = subprocess.check_output(
+                  ["git", "describe", "--tags", "--abbrev=0", "--match", "v[0-9]*.[0-9]*.[0-9]*"],
+                  text=True,
+              ).strip()
+              if latest.startswith("v"):
+                  latest_tag_version = parse(latest[1:])
+          except subprocess.CalledProcessError:
+              latest_tag_version = None
+
+          base = max(v for v in [pyproject_version, latest_tag_version] if v is not None)
+          major, minor, patch = base
+          if bump == "major":
+              major, minor, patch = major + 1, 0, 0
+          elif bump == "minor":
+              minor, patch = minor + 1, 0
+          elif bump == "patch":
+              patch += 1
+          else:
+              raise SystemExit(f"Invalid bump: {bump}")
+
+          version = f"{major}.{minor}.{patch}"
+          path.write_text(text.replace(py_match.group(0), f'version = "{version}"', 1))
+
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
               f.write(f"version={version}\n")
           PY
@@ -107,8 +142,6 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
-          user: __token__
-          password: ${{ secrets.PYPI_API_TOKEN }}
 
       - name: Create GitHub release
         if: steps.label.outputs.release != 'none'
