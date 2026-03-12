@@ -135,6 +135,7 @@ jobs:
         if: steps.label.outputs.release != 'none'
         run: |
           python -m pip install --upgrade pip build
+          cp README.md python/README.md
           python -m build python/ --outdir dist/
 
       - name: Publish to PyPI
